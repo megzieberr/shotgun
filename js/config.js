@@ -4,19 +4,38 @@
 // only have to touch one file. All values below are placeholders on purpose
 // this session (scaffold + mock data only, no network calls of any kind).
 
-// --- Spotify (filled in session 2: Authorization Code with PKCE) ---
-export const SPOTIFY_CLIENT_ID = ''; // TODO session 2: Spotify developer dashboard, Development Mode app
-export const SPOTIFY_REDIRECT_URI = ''; // TODO session 2: the deployed GitHub Pages URL, e.g. https://<user>.github.io/shotgun/
-export const SPOTIFY_AUTH_ENDPOINT = 'https://accounts.spotify.com/authorize'; // reference only, not called this session
-export const SPOTIFY_TOKEN_ENDPOINT = 'https://accounts.spotify.com/api/token'; // reference only, not called this session
+// --- Spotify (Authorization Code with PKCE — no client secret exists, by
+// design; see js/spotify-auth.js) ---
+export const SPOTIFY_CLIENT_ID = 'c6da2250ec364e29aa5e32c057f9dd05';
+export const SPOTIFY_AUTH_ENDPOINT = 'https://accounts.spotify.com/authorize';
+export const SPOTIFY_TOKEN_ENDPOINT = 'https://accounts.spotify.com/api/token';
 export const SPOTIFY_SCOPES = [
-  // TODO session 2: trim to exactly what queue-stocking + recently-played needs
   'user-read-recently-played',
+  'user-top-read',
+  'user-library-read',
   'user-read-playback-state',
   'user-modify-playback-state',
-  'user-top-read',
   'playlist-read-private',
+  'playlist-read-collaborative',
 ];
+
+/**
+ * The redirect URI is picked at RUNTIME, not stored as a constant, because
+ * dev (127.0.0.1) and prod (GitHub Pages) need different exact strings —
+ * Spotify matches redirect_uri byte-for-byte against what's registered on
+ * the app. Both strings below are registered on her Spotify app already.
+ *
+ * IMPORTANT: dev login testing must load the app via 127.0.0.1:5208, NOT
+ * localhost:5208 — same server, but Spotify treats them as different hosts
+ * and will reject the redirect with an "INVALID_CLIENT: Insecure redirect
+ * URI" style error if the page was opened via localhost.
+ */
+export function getSpotifyRedirectUri() {
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+  return hostname === '127.0.0.1'
+    ? 'http://127.0.0.1:5208/'
+    : 'https://megzieberr.github.io/shotgun/';
+}
 
 // --- ReccoBeats (audio features cache lookup, session 2/3) ---
 export const RECCOBEATS_BASE_URL = ''; // TODO session 2/3

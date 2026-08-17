@@ -10,7 +10,17 @@ decided before she pulls off and nothing needs touching mid-drive.
 Full product brief: `C:\Users\megzi\Desktop\drive-dj-BRIEF.md` (app was
 named "Drive DJ" there; renamed Shotgun before this build).
 
-## Current state (build session 3 of 4 — brain: flow ordering + ReccoBeats)
+## Current state (build session — Spotify plumbing: PKCE auth + 429 breaker)
+
+Spotify auth, the 429-safe request breaker, and a real `spotify-backend.js`
+are now built and unit-verified — but **nothing has been through a real
+logged-in Spotify session yet**. Every method that needs a real account
+(library fetch, search, recently-played, queue POST, /me) is "built and
+unit/URL-verified, not live-verified" until Megan does the first login with
+the foreman. See "Spotify plumbing session notes" below for exactly what's
+proven vs. still open.
+
+## Previous state (build session 3 of 4 — brain: flow ordering + ReccoBeats)
 
 Static ES-module PWA, no build step. Local mock backend (`?local=1`) still
 has zero external network calls; the NEW ReccoBeats client is real and
@@ -50,28 +60,33 @@ search/Just Play, not the UI markup.
 - `tests/flow-order.test.mjs` — 12 tests, `node --test tests/`, mock library
   only, no network. All passing.
 
-**Architecture seams still open for sessions 2 & 4:**
-- `js/backends/spotify-backend.js` — untouched, still throws
-  `"Spotify backend not wired yet (session 2)"` for every method. This
-  session's `api.js` change calls it defensively (try/catch, falls through
-  to ReccoBeats), so it stays safe to wire up in either order.
+**Architecture seams still open for session 4:**
+- `js/backends/spotify-backend.js` is now real (this session) — the only
+  remaining seam is Supabase.
 - Session 4 (Supabase): swap `feature-cache.js`'s storage adapter, add
   taste scores / time-of-day profiles / drive history, make "Just Play" a
   real learned mix instead of the honest "balanced mix" stub it is now.
 
 ## Next up
 
-- Session 2: Spotify Authorization Code w/ PKCE, the 429-safe request queue
-  from the brief, fill in `spotify-backend.js` for real.
+- **Megan + foreman: the first real Spotify login.** Everything Spotify
+  needs a logged-in session for is built and unit/URL-verified but not
+  live-verified — see "Spotify plumbing session notes" below for the full
+  list of what that covers. Load the app via `http://127.0.0.1:5208`
+  (NOT `localhost:5208` — Spotify matches the redirect URI string exactly),
+  click Settings → Connect Spotify, log in for real, then re-run a mood
+  drive and confirm a queue actually lands on the phone.
 - Session 4: Supabase schema (taste scores, time-of-day profiles, audio
   features cache — swap `feature-cache.js`'s adapter — drive history) + the
   learning loop that makes "Just Play" real.
-- Waiting on Megan: real seed songs per mood for `MOOD_SEEDS` in
-  `js/config.js` (empty for all four moods right now — override logic is
-  wired and will "just work" the moment ids land, per the build brief).
+- Also waiting on Megan: real seed songs per mood for `MOOD_SEEDS` in
+  `js/config.js` — superseded by `MOOD-SEEDS.md`'s six-mood rulings
+  (2026-08-17); NOT this session's job to wire the new moods in, a later
+  session resolves her song lists to real track ids and rebuilds
+  `MOOD_PRESETS`/`MOOD_SEEDS`/`MOOD_ORDER` for six buttons.
 - Not done yet, deliberately out of this session's scope: any deploy, any
-  git remote, any Supabase project, real Spotify calls, touching
-  `spotify-backend.js`.
+  git remote, any Supabase project, any real (logged-in) Spotify call, any
+  mood-UI change for the new six-mood ruling.
 
 ## Session 3 notes (brain: flow ordering + ReccoBeats)
 
@@ -141,6 +156,129 @@ this session's own browser verification, see below).
 - Batch size cap of 40 for the ReccoBeats id-lookup endpoint is untested
   above 3 ids live; picked as a conservative round number, not verified.
 
+## Spotify plumbing session notes (PKCE auth + 429 breaker)
+
+**New files:**
+- `js/spotify-auth.js` — Authorization Code with PKCE. code_verifier +
+  S256 code_challenge (crypto.subtle), authorize URL with a checked `state`
+  param, redirect-callback handler that exchanges the code then scrubs the
+  query string via `history.replaceState` (so a reload never re-exchanges
+  a spent code), token storage in localStorage, and single-flight
+  proactive refresh (< 5 min validity remaining).
+- `js/spotify-client.js` — the 429 breaker + `spotifyFetch()` wrapper every
+  `api.spotify.com` call goes through. On 401: one forced refresh + one
+  retry, then a clear English error.
+
+**Changed files:**
+- `js/backends/spotify-backend.js` — filled in for real: `getLibrary()`
+  (saved tracks, paged 50/call, **capped at 200 tracks**),
+  `searchTracks()`, `getRecentlyPlayed()`, `stockQueue()` (sequential
+  per-track POST through the breaker; a 404/no-active-device fails fast
+  with a `NO_ACTIVE_DEVICE`-coded error app.js turns into a toast),
+  `getAudioFeatures()` (deliberately returns `{}` so `api.js`'s existing
+  cache → backend → ReccoBeats chain reaches ReccoBeats instead of this
+  file duplicating that client).
+- `js/api.js` — `hasSpotifyAuth()` is real; backend selection
+  (`getBackend()`) is now resolved **per call**, not once at module load —
+  needed because app.js's redirect-callback handling can save fresh tokens
+  mid-boot, and a fixed singleton computed at import time would have stayed
+  on the local backend until a second page load. Added
+  `getConnectedDisplayName()` (GET /v1/me) and the stocking-pipeline gate:
+  `resolveCandidatePool()` / `keepTracksWithFeatures()` — see next
+  paragraph.
+- `js/app.js` — boots by calling `spotifyAuth.handleRedirectCallback()`
+  BEFORE any `api.*` call; wires Settings' Connect Spotify (starts PKCE),
+  Log out (clears tokens, local data untouched), and a live display-name
+  panel; all three drive builders now run off a `candidatePool` (library
+  merged with resolved audio features, unresolved tracks dropped) instead
+  of the raw `library`; `runStockingFlow` now renders the confirm screen
+  from the already-resolved ordered-track objects it built the queue FROM,
+  not from the backend's `stockQueue()` return value (the real Spotify
+  queue POST is 204 No Content — nothing to reconstruct display data from);
+  seed-search results guard against a track with no `energy` yet (real
+  Spotify search hits won't have one) instead of crashing on
+  `.toFixed()`; picking a seed now resolves that track's own audio
+  features before it becomes the drive anchor.
+- `sw.js` — added `js/spotify-auth.js` + `js/spotify-client.js` to
+  PRECACHE_FILES, bumped `shotgun-v4` → `shotgun-v5`.
+
+**The stocking-pipeline feature gate (foreman review rule):**
+`flow-order.js`'s `weightedDistance()` treats a track with NO comparable
+dimensions as distance 0 from every anchor (correct behaviour for "missing
+one dimension", wrong for "missing everything" — see its own doc comment).
+A raw Spotify library/search result has no audio features at all until
+`getAudioFeatures()` resolves them, so without a gate, an unresolved track
+would jump to the front of every queue. Enforced in `js/api.js`
+(`keepTracksWithFeatures` — pure, unit-tested; `resolveCandidatePool` — the
+async wrapper that calls `getAudioFeatures` then filters), never inside
+`flow-order.js` itself, per the brief. `js/app.js` calls
+`resolveCandidatePool()` once after every library load and once per picked
+seed track, and passes the result (`candidatePool`), not raw `library`, to
+every `buildQueue()` call.
+
+**How the breaker maps to DecklingAir's design:** kept — one serialized
+queue, min gap that widens ×2 on any 429 (floor 1000ms, cap 8000ms) and
+relaxes ×0.9 per clean response (floor 350ms), Retry-After honoured
+exactly, hard ban above 15s persisted so a reload doesn't re-probe,
+single-flight token refresh. Simplified: DecklingAir runs TWO priority
+tiers (interactive vs. background-bulk) because his server does continuous
+background library/history warming and a background rate-limit must never
+stall the player; Shotgun makes ~15-25 calls per drive total and does no
+background scanning at all (per the brief), so there's nothing background
+to protect the interactive tier from — one tier is enough. Also dropped:
+his file-persisted breaker (`BREAKER_FILE`) — this is a browser app, so the
+ban deadline is persisted to `localStorage` instead (read fresh on every
+check, not cached in a module variable, so it survives a real page reload
+the same way his survives a `pm2 restart`).
+
+**The exact authorize URL this build produced** (captured live at
+`http://127.0.0.1:5208`, redirected to Spotify's real login page — proof
+Spotify accepted it as well-formed — then stopped there, no login
+attempted, per the hard rule):
+```
+https://accounts.spotify.com/authorize?
+  scope=user-read-recently-played+user-top-read+user-library-read+user-read-playback-state+user-modify-playback-state+playlist-read-private+playlist-read-collaborative
+  &response_type=code
+  &redirect_uri=http%3A%2F%2F127.0.0.1%3A5208%2F
+  &state=73d17598da39d850a0511946216425bf
+  &code_challenge_method=S256
+  &client_id=c6da2250ec364e29aa5e32c057f9dd05
+  &code_challenge=Tc0jXebJC7Tj8AxsW2Jk_E7FAdlWpeVPOH0Y6r9TAng
+```
+
+**Test results:** 25/25 passing across `tests/flow-order.test.mjs` (the
+original 12, untouched), `tests/stocking-filter.test.mjs` (6, new — the
+feature-gate rule, pure functions, no network),
+`tests/spotify-auth.test.mjs` (3, new — PKCE S256 against the RFC 7636 §A.2
+reference vector, single-flight refresh under 10 concurrent callers, no
+refresh when validity is fine), `tests/spotify-client.test.mjs` (4, new —
+soft 429 pauses ~2s, hard 429 (30s) bans immediately without waiting it out
+and refuses all further calls locally, the ban survives a fresh
+localStorage-backed check, gap widens on 429 / relaxes on success). Browser
+smoke test at `http://127.0.0.1:5208`: default unauthed state correctly
+shows the local backend + "Connect Spotify" in Settings; `?local=1` drove a
+full Chilled-mood tap through to a rendered 5-track confirm screen with no
+console errors; Connect Spotify produced the URL above.
+
+**Everything still waiting on a real logged-in user (not live-verified this
+session):** `getLibrary()`/`searchTracks()`/`getRecentlyPlayed()`/
+`stockQueue()`/`getConnectedDisplayName()` against real Spotify data; the
+token exchange and refresh round-trips against Spotify's real token
+endpoint; the actual 200-track library cap in practice; the
+`NO_ACTIVE_DEVICE` toast against a real "nothing's playing" state; whether
+Spotify's `next` pagination links behave exactly as assumed in
+`getLibrary()`'s loop.
+
+**Uncertain / left for later:** the 200-track library cap is a judgement
+call ("keeps the initial fetch sensible" per the brief), not something
+tuned against her real library size — may want raising or lowering once
+she's connected and the drive quality is visible; `mustInclude` on a seed
+picked from Spotify search (not her own library) only actually forces a
+lead-in slot if that track happens to be in `candidatePool` — a search hit
+outside her library still anchors the drive via `anchor`, it just isn't
+guaranteed the literal first slot (this seam already existed in the
+scaffold's original wiring, not introduced this session).
+
 ## Rulings
 
 - **English only.** No Afrikaans anywhere in this app — unlike her other
@@ -153,6 +291,13 @@ this session's own browser verification, see below).
 - **Dev port:** 5208, `python -m http.server`, launch.json entry `shotgun`
   added at `C:\Users\megzi\.claude\.claude\launch.json` (the nested
   `.claude\.claude` path is correct, not a typo).
+- **Spotify login testing MUST use `http://127.0.0.1:5208`, not
+  `localhost:5208`.** Same server, but the two registered Spotify redirect
+  URIs are exact strings (`http://127.0.0.1:5208/` for dev,
+  `https://megzieberr.github.io/shotgun/` for prod — picked at runtime by
+  `getSpotifyRedirectUri()` in `js/config.js`) and Spotify matches
+  redirect_uri byte-for-byte. Opening the app via `localhost` will build an
+  authorize URL Spotify rejects.
 - **Theme name: "Amber Mile."** Dark cockpit-console palette (`--ink`
   `#0b0e14` background, `--panel` `#141a24` surfaces, `--amber` `#ff9d3f`
   primary glow, `--teal` `#34d1c4` secondary/"shotgun-seat-cool" accent,

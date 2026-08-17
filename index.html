@@ -107,20 +107,20 @@
       <p class="settings-label">Account</p>
       <div class="settings-inline">
         <div>
-          <div class="settings-value">Spotify</div>
-          <div class="settings-hint">Coming in a later build</div>
+          <div class="settings-value" id="spotify-account-name">Spotify</div>
+          <div class="settings-hint" id="spotify-account-hint">Not connected yet</div>
         </div>
-        <span class="pill-status">Not connected</span>
+        <span class="pill-status" id="spotify-status-pill">Not connected</span>
       </div>
-      <button class="btn btn-secondary" style="margin-top:14px; width:100%;" disabled>Connect Spotify</button>
+      <button class="btn btn-secondary" id="btn-connect-spotify" type="button" style="margin-top:14px; width:100%;">Connect Spotify</button>
     </div>
 
     <div class="settings-row">
       <p class="settings-label">Session</p>
-      <button class="btn btn-secondary" style="width:100%;" disabled>Log out</button>
+      <button class="btn btn-secondary" id="btn-spotify-logout" type="button" style="width:100%;" disabled>Log out</button>
     </div>
 
-    <p class="about-line">Shotgun · scaffold build · local mock data</p>
+    <p class="about-line" id="about-line">Shotgun · local data</p>
   </section>
 
 </div>

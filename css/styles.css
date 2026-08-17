@@ -716,6 +716,11 @@ button {
   color: var(--haze);
 }
 
+.pill-status.is-connected {
+  background: rgba(52, 209, 196, 0.16);
+  color: var(--teal);
+}
+
 .about-line {
   font-family: var(--font-mono);
   font-size: 12px;

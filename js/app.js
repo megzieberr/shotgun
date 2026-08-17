@@ -6,6 +6,7 @@
 // in session 2.
 
 import * as api from './api.js';
+import * as spotifyAuth from './spotify-auth.js';
 import { buildQueue, averageFeatures } from './flow-order.js';
 import {
   MOOD_PRESETS,
@@ -32,6 +33,12 @@ const ICONS = {
 // ---------- State ----------
 
 let library = [];
+// The pool buildQueue is actually allowed to draw from: `library` merged
+// with resolved audio features, tracks that never resolved dropped (the
+// foreman review rule — see api.js's resolveCandidatePool/
+// keepTracksWithFeatures doc comments for why an unresolved track can't be
+// allowed anywhere near buildQueue).
+let candidatePool = [];
 let driveMinutes = loadDefaultMinutes();
 let selectedSeed = null;
 
@@ -47,23 +54,62 @@ async function init() {
   renderLengthChips(document.getElementById('settings-length-chips'), driveMinutes, onSettingsLengthChange);
   updateDriveHint();
 
+  // MUST run before the first api.* call: a Spotify redirect can save fresh
+  // tokens here, and api.js's backend selection is re-checked per call (not
+  // cached from page-load), so getLibrary() right below already sees the
+  // real auth state on the very same page load that returns from Spotify.
+  try {
+    const redirectResult = await spotifyAuth.handleRedirectCallback();
+    if (redirectResult === 'authenticated') showToast('Connected to Spotify.');
+    else if (redirectResult === 'error') showToast('Could not connect to Spotify — please try again.');
+  } catch (err) {
+    console.error('Shotgun: Spotify redirect handling failed', err);
+  }
+
+  await refreshLibrary();
+  renderSpotifyAccountPanel();
+}
+
+/** (Re)loads the library from whichever backend is active and resolves it
+ * into a buildQueue-safe candidate pool. Called on boot, after login, and
+ * after logout (the backend — and therefore the library — changes each time). */
+async function refreshLibrary() {
   try {
     library = await api.getLibrary();
+    candidatePool = await api.resolveCandidatePool(library);
+    if (library.length && !candidatePool.length) {
+      showToast('Songs are loaded, but none have known audio features yet — try again shortly.');
+    }
   } catch (err) {
     console.error('Shotgun: failed to load library', err);
     showToast('Could not load the song library.');
+    library = [];
+    candidatePool = [];
   }
 }
 
 // ---------- Static control wiring ----------
 
 function wireStaticControls() {
-  document.getElementById('btn-open-settings').addEventListener('click', () => showView('view-settings'));
+  document.getElementById('btn-open-settings').addEventListener('click', () => {
+    showView('view-settings');
+    renderSpotifyAccountPanel();
+  });
   document.getElementById('btn-close-settings').addEventListener('click', () => showView('view-home'));
   document.getElementById('btn-plan-another').addEventListener('click', () => showView('view-home'));
   document.getElementById('btn-just-play').addEventListener('click', startJustPlayDrive);
   document.getElementById('btn-stock-seed').addEventListener('click', () => {
     if (selectedSeed) startSeedDrive(selectedSeed);
+  });
+
+  document.getElementById('btn-connect-spotify').addEventListener('click', () => {
+    spotifyAuth.startLogin();
+  });
+  document.getElementById('btn-spotify-logout').addEventListener('click', async () => {
+    spotifyAuth.logout();
+    showToast('Logged out of Spotify. Local data stays put.');
+    renderSpotifyAccountPanel();
+    await refreshLibrary();
   });
 
   const seedInput = document.getElementById('seed-input');
@@ -187,7 +233,7 @@ function renderSeedResults(matches) {
         <span class="seed-result-title">${escapeHtml(track.title)}</span><br/>
         <span class="seed-result-artist">${escapeHtml(track.artist)}</span>
       </span>
-      <span class="seed-result-energy">E ${track.energy.toFixed(2)}</span>
+      <span class="seed-result-energy">${isNum(track.energy) ? `E ${track.energy.toFixed(2)}` : ''}</span>
     `;
     row.addEventListener('click', () => pickSeed(track));
     box.appendChild(row);
@@ -228,7 +274,7 @@ function clearSeed() {
 function resolveMoodAnchor(moodId, preset) {
   const seedIds = MOOD_SEEDS[moodId] || [];
   if (seedIds.length) {
-    const seedTracks = library.filter((t) => seedIds.includes(t.id));
+    const seedTracks = candidatePool.filter((t) => seedIds.includes(t.id));
     if (seedTracks.length) return averageFeatures(seedTracks);
   }
   return preset.target;
@@ -239,7 +285,7 @@ async function startMoodDrive(moodId) {
   const n = songsForMinutes(driveMinutes);
   const anchor = resolveMoodAnchor(moodId, preset);
 
-  const ordered = buildQueue(library, {
+  const ordered = buildQueue(candidatePool, {
     anchor,
     n,
     filters: preset.filters,
@@ -259,10 +305,27 @@ async function startMoodDrive(moodId) {
 async function startSeedDrive(seedTrack) {
   const n = songsForMinutes(driveMinutes);
 
-  const ordered = buildQueue(library, {
-    anchor: seedTrack,
+  // The picked seed might be a bare search result with no features yet
+  // (e.g. a real Spotify search hit) — resolve its own features through the
+  // same cache -> backend -> ReccoBeats path everything else uses so the
+  // anchor buildQueue walks from is a real vector, not an empty one.
+  let anchorTrack = seedTrack;
+  try {
+    const featuresById = await api.getAudioFeatures([seedTrack.id]);
+    const resolved = featuresById[seedTrack.id];
+    if (resolved) anchorTrack = { ...seedTrack, ...resolved };
+  } catch (err) {
+    console.warn('Shotgun: could not resolve the seed track’s own audio features', err);
+  }
+
+  const ordered = buildQueue(candidatePool, {
+    anchor: anchorTrack,
     n,
-    mustInclude: [seedTrack.id], // the seed song itself always leads the drive
+    // Only actually forces a lead-in slot if the seed is part of
+    // candidatePool (e.g. picked from her own library); a seed found via
+    // Spotify search that isn't in the pool still anchors the drive via
+    // `anchor` above, it just isn't guaranteed the literal first slot.
+    mustInclude: [seedTrack.id],
     varietySeed: `seed-${seedTrack.id}-${Date.now()}`,
   });
 
@@ -282,7 +345,7 @@ async function startJustPlayDrive() {
   showToast('Taste learning arrives in a later build — using a balanced mix for now.');
 
   const n = songsForMinutes(driveMinutes);
-  const ordered = buildQueue(library, {
+  const ordered = buildQueue(candidatePool, {
     n,
     varietySeed: `justplay-${Date.now()}`,
   });
@@ -298,23 +361,38 @@ async function startJustPlayDrive() {
 // ---------- Stocking + confirm ----------
 
 async function runStockingFlow(orderedTracks, context) {
+  if (!orderedTracks.length) {
+    showToast('No songs with known audio features to build a drive from yet.');
+    return;
+  }
+
   document.getElementById('stocking-sub').textContent = context.subtitle;
   showView('view-stocking');
 
   const minAnimation = new Promise((resolve) => setTimeout(resolve, 1400));
   const stockCall = api.stockQueue(orderedTracks.map((t) => t.id));
 
-  let result;
   try {
-    [, result] = await Promise.all([minAnimation, stockCall]);
+    await Promise.all([minAnimation, stockCall]);
   } catch (err) {
     console.error('Shotgun: stockQueue failed', err);
-    showToast('Could not stock the queue.');
+    if (err && err.code === 'NO_ACTIVE_DEVICE') {
+      showToast('Open Spotify and tap play/pause once to wake a device, then try again.', 4400);
+    } else if (err && err.name === 'SpotifyBanError') {
+      showToast(err.message, 4400);
+    } else {
+      showToast('Could not stock the queue.');
+    }
     showView('view-home');
     return;
   }
 
-  renderConfirm(result.tracks, context);
+  // Render from the already-resolved track objects buildQueue produced
+  // (full title/artist/duration/energy), not the backend's stockQueue
+  // return value — the real Spotify backend's queue POST has no response
+  // body to reconstruct display data from (204 No Content per track); the
+  // backend call above only needs to confirm success/failure.
+  renderConfirm(orderedTracks, context);
   showView('view-confirm');
 }
 
@@ -350,7 +428,55 @@ function renderConfirm(tracks, context) {
   });
 }
 
+// ---------- Spotify account panel (Settings) ----------
+
+async function renderSpotifyAccountPanel() {
+  const nameEl = document.getElementById('spotify-account-name');
+  const hintEl = document.getElementById('spotify-account-hint');
+  const pillEl = document.getElementById('spotify-status-pill');
+  const connectBtn = document.getElementById('btn-connect-spotify');
+  const logoutBtn = document.getElementById('btn-spotify-logout');
+  const aboutEl = document.getElementById('about-line');
+
+  const authed = api.hasSpotifyAuth();
+  logoutBtn.disabled = !authed;
+  connectBtn.disabled = false;
+  if (aboutEl) aboutEl.textContent = `Shotgun · ${api.activeBackendName()} data`;
+
+  if (!authed) {
+    nameEl.textContent = 'Spotify';
+    hintEl.textContent = 'Not connected yet';
+    pillEl.textContent = 'Not connected';
+    pillEl.classList.remove('is-connected');
+    connectBtn.textContent = 'Connect Spotify';
+    return;
+  }
+
+  pillEl.textContent = 'Connected';
+  pillEl.classList.add('is-connected');
+  connectBtn.textContent = 'Reconnect Spotify';
+  nameEl.textContent = 'Spotify';
+  hintEl.textContent = 'Connected';
+
+  try {
+    const name = await api.getConnectedDisplayName();
+    if (name) {
+      nameEl.textContent = name;
+      hintEl.textContent = 'Connected';
+    } else {
+      hintEl.textContent = 'Connected (name unavailable)';
+    }
+  } catch (err) {
+    console.warn('Shotgun: could not load the Spotify display name', err);
+    hintEl.textContent = 'Connected (could not load your name right now)';
+  }
+}
+
 // ---------- View + toast helpers ----------
+
+function isNum(v) {
+  return typeof v === 'number' && !Number.isNaN(v);
+}
 
 function showView(id) {
   document.querySelectorAll('.view').forEach((v) => v.classList.remove('is-active'));
