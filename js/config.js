@@ -40,9 +40,14 @@ export function getSpotifyRedirectUri() {
 // --- ReccoBeats (audio features cache lookup, session 2/3) ---
 export const RECCOBEATS_BASE_URL = ''; // TODO session 2/3
 
-// --- Supabase (taste profile + drive history, session 4) ---
-export const SUPABASE_URL = ''; // TODO session 4 — whenworks account, free project slot (her ruling)
-export const SUPABASE_ANON_KEY = ''; // TODO session 4
+// --- Supabase (taste profile + drive history, session 4b) ---
+// Project created by the foreman ahead of this session (whenworks account,
+// free project slot, per her ruling). Anon key is public-by-design (RLS does
+// the actual gatekeeping — see supabase/schema.sql) so it's fine committed
+// to this public repo, same as every other app of hers on this pattern.
+export const SUPABASE_URL = 'https://jgcutvnmmehqpskpvmzy.supabase.co';
+export const SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpnY3V0dm5tbWVocXBza3B2bXp5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5ODY4NDgsImV4cCI6MjEwMjU2Mjg0OH0.SxcG_ctwmKHyadO_xBV4LBVQi2rjGj8f6zpOSsnklzM';
 
 // --- Drive length ---
 export const DEFAULT_DRIVE_MINUTES = 15;

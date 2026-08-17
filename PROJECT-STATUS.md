@@ -10,7 +10,193 @@ decided before she pulls off and nothing needs touching mid-drive.
 Full product brief: `C:\Users\megzi\Desktop\drive-dj-BRIEF.md` (app was
 named "Drive DJ" there; renamed Shotgun before this build).
 
-## Current state (build session 4a — six moods, seed resolver, scan progress)
+## Current state (build session 4b — Supabase + the learning loop)
+
+The Supabase layer and the taste-learning loop (the brief's v2) are built.
+**Nothing has been through a real Supabase schema/user/login yet** — same
+"built and unit/URL-verified, not live-verified" status the Spotify plumbing
+session left things in, until Megan runs the schema and does the first
+cloud sign-in.
+
+**New files:**
+- `supabase/schema.sql` — six tables + a `keepalive()` RPC, written for her
+  to paste into the SQL editor herself (this session never touches the
+  MCP Supabase tools or runs SQL directly, per the hard rule). Idempotent
+  (every `CREATE TABLE`/`POLICY`/`FUNCTION` safe to re-run), RLS ON on
+  every table with explicit per-table grants, nothing anon-accessible
+  except `keepalive()`. Table-by-table:
+  - `track_features` (spotify_id PK, energy/valence/tempo/danceability/
+    acousticness, fetched_at) — cloud twin of `feature-cache.js`.
+  - `taste_artists` (artist_name PK, score int check -8..8, soft_ban_until,
+    updated_at) — the ported DecklingAir artist score.
+  - `taste_tracks` (spotify_id PK, skip_count check >=0, soft_ban_until,
+    updated_at) — the ported DecklingAir per-track dislike counter.
+  - `mood_seeds` (id identity PK, mood_key, spotify_id, source_raw,
+    accepted_at, unique(mood_key,spotify_id)) — cloud twin of
+    `seed-resolver.js`'s resolved seeds.
+  - `drive_history` (id identity PK, started_at, kind, mood_or_seed,
+    minutes, track_ids text[], time_bucket) — one row per stocked drive,
+    a log, not the per-track skip/win signal (that's the two taste_*
+    tables, reconciled from recently-played, not from this table).
+  - `tod_profiles` (bucket PK check in morning/afternoon/evening, target
+    jsonb, sample_count, updated_at) — the rolling time-of-day vector.
+  - Lint pass: read top to bottom twice by hand (she runs this blind, a
+    syntax error lands on her screen) — every table has RLS + explicit
+    grants, every policy uses `drop policy if exists` first so a re-run
+    never errors, `keepalive()` matches her fleet's SECURITY DEFINER +
+    pinned `search_path` + anon-EXECUTE convention exactly.
+- `js/cloud-sync.js` — fetch-based Supabase REST client (no SDK, no build
+  step). Sign-in/out (synthetic-email username+password, her house
+  pattern — `${username}@shotgun.app`, single-flight token refresh),
+  feature-cache merge, resolved-seeds merge, `recordDriveHistory()`, and
+  `loadTasteState()`/`pushTasteState()` for the learning loop. Every sync
+  function silently no-ops (console.info only) when not configured/signed
+  in or the schema isn't ready (detected via PostgREST's `PGRST2*`/"schema
+  cache" error shape) — a REAL failure once signed in DOES toast, per her
+  "surface every save error" rule (`setToastHandler()`, wired from app.js
+  to avoid a circular import).
+  - **Deliberately NOT a literal `setStorageAdapter()` swap** on
+    `feature-cache.js` or `seed-resolver.js`, even though both already
+    expose that seam for exactly this. Both modules' storage is read
+    SYNCHRONOUSLY by existing un-awaited callers (e.g. app.js's boot-time
+    `applyResolvedSeedsToConfig()`); a network-backed (necessarily async)
+    adapter would make those calls silently see a Promise instead of real
+    data — not a crash, just quiet data loss. Used an explicit async
+    pull-then-merge pattern instead, via two small additive exports:
+    `feature-cache.js`'s new `getAllCached()` and `seed-resolver.js`'s new
+    `mergeResolvedSeeds()` (both additive-only, neither changes any
+    existing export's behaviour or breaks the two files' existing tests —
+    confirmed, see Test results below). Same durability outcome (seeds/
+    features survive a reinstall), zero risk to any synchronous call site.
+- `js/learning.js` — the scoring engine, **ported from her brother's
+  DecklingAir** (`github.com/Py-xxx/DecklingAir`, `server/spotify.js`,
+  read directly this session — see "DecklingAir scoring engine, exactly
+  what was read" below for the real constants pulled from his code).
+  Two deliberate adaptations from the reference, both because Shotgun has
+  none of DecklingAir's tuning sliders and plays far less continuously:
+  1. DecklingAir splits skip/win via a "skip sensitivity" slider (two
+     thresholds). Shotgun has no such slider — `SKIP_FRAC = 0.6` is HER
+     stated single cutline from this session's brief, collapsing
+     DecklingAir's dual strong/soft-skip zone into one line. `WIN_FRAC =
+     0.8` is ported exactly (his `FINISH_FRAC`).
+  2. DecklingAir recovers a soft-ban only via a later engaged listen —
+     fine for an app playing continuously all day; Shotgun only
+     resurfaces something if it's picked for a FUTURE drive, which a
+     banned item by definition won't be, so score-only recovery could
+     never fire. Added `SOFT_BAN_EXPIRY_DAYS = 21` as a time-based safety
+     net under the same score-based recovery (still primary) — 21 days
+     borrows DecklingAir's own `REDISCOVER_MIN_AGE_MS` constant for
+     consistency with the reference.
+  - `reconcileTimeline()` (pure): recently-played (newest-first) ->
+     chronological -> classify each play from the gap to the NEXT play's
+     timestamp vs. that track's own duration. The most recent play is
+     NEVER classified the same pass it's seen in (no later timestamp
+     exists yet) — deferred to a future pass, watermark doesn't advance
+     past it either. Unit-tested including that exact deferred-item case.
+  - `applyEvents()` (pure): the whole scoring engine over a batch of
+     classified events — artist score ±1 clamped [-8,8], track skip-count
+     soft-ban at 2 (both ported exactly), soft_ban_until set/refreshed on
+     cross, cleared on score-only recovery, rolling time-of-day vector
+     updated from WINS only (a skip is signal about that listen, not
+     evidence of what the bucket should sound like).
+  - `shapePoolForDrive()` — the score-weighting plug-in point for
+     `buildQueue`, **without touching flow-order.js**: avoided-artist/
+     soft-banned tracks are filtered out of the POOL array before
+     `buildQueue` ever sees them (hard exclusion, at the app.js call
+     site); `familiarityWeighted` moods (Feel Good Vibes) get a real
+     `familiarity` field merged onto surviving tracks from reconciled play
+     counts — the EXACT field `flow-order.js`'s `effectiveDistance()`
+     already reads, so nothing in that file needed to change. Honestly:
+     this is hard exclusion for avoided/banned + real familiarity for Feel
+     Good Vibes specifically, not a smooth continuous down-weight across
+     every mood for intermediate (not-yet-avoided) scores — that's a
+     reasonable next refinement, not built this session.
+  - `runReconcile()` / `pullCloudTasteIntoLocal()` (async orchestration,
+     live-verified not unit-tested, same precedent as `api.js`'s
+     `resolveCandidatePool`): fetch recently-played, resolve audio
+     features for WIN tracks only (recently-played's own track objects
+     never carry features — normaliseTrack's doc comment), score, save
+     locally, push to cloud fire-and-forget. Cloud pull is a **fill-gaps
+     merge only** (cloud fills whatever local is missing, never overwrites
+     what local already has) — a full bidirectional last-write-wins sync
+     would need per-field versioning, out of scope this session; flagged
+     honestly rather than oversold.
+  - Reconciles from ALL of recently-played, not filtered to
+     `drive_history`-matched tracks — a skip/win is real taste signal
+     whether the track came from a stocked queue or Spotify's own autoplay
+     after it ran out, matching DecklingAir's own philosophy. `drive_history`
+     stays a useful log, not a scoring filter — a deliberate scope call,
+     flagged here in case Megan wanted strict per-drive matching instead.
+
+**Wire-up in `js/app.js`:**
+- Boot gains a fire-and-forget, non-blocking chain (mood tiles already
+  rendered before this starts): `pullCloudTasteIntoLocal()` ->
+  `runReconcile()` -> `syncFeatureCache()` + `syncResolvedSeeds()`, gated
+  on `hasSpotifyAuth()` (recently-played needs a real Spotify session;
+  each cloud-sync call gates on cloud sign-in separately and no-ops if
+  she's only Spotify-connected, not cloud-signed-in).
+- All three drive builders now shape their pool through
+  `learning.shapePoolForDrive()` before `buildQueue()`. The seed-drive
+  builder re-injects her explicitly-picked seed track if shaping would
+  otherwise have dropped it (a direct pick outranks a durable artist
+  score). "Just Play" now anchors on the current time-of-day bucket's
+  learned vector once `sample_count > 0`, else the same honest "balanced
+  mix" fallback as before (verified live in local mode — no learned
+  profile yet, so it correctly showed the fallback toast, see Verification
+  below).
+- `runStockingFlow()` (the one place every drive kind passes through)
+  fire-and-forget logs `recordDriveHistory()` after a successful stock —
+  one call site instead of three.
+- Settings gains a "Cloud sync" section (signed-in state, last-synced
+  time, sign in/out) — `index.html` + a small `.text-input`/
+  `.cloud-sync-form` CSS addition reusing the existing panel/pill/button
+  classes, no new visual language introduced.
+- `sw.js`: added `js/cloud-sync.js` + `js/learning.js` to
+  `PRECACHE_FILES`, bumped `shotgun-v6` -> `shotgun-v7`.
+- `js/config.js`: `SUPABASE_URL`/`SUPABASE_ANON_KEY` filled in (the
+  foreman-created project, `jgcutvnmmehqpskpvmzy`) — anon key is
+  public-by-design (RLS gatekeeps, not the key), fine committed.
+
+**Test results:** 61/61 passing (`node --test tests/flow-order.test.mjs
+tests/stocking-filter.test.mjs tests/spotify-auth.test.mjs
+tests/spotify-client.test.mjs tests/seed-resolver.test.mjs
+tests/learning.test.mjs`) — the prior 35 (all untouched, still green after
+the `feature-cache.js`/`seed-resolver.js` additive exports) plus 26 new
+`tests/learning.test.mjs` tests: play-fraction/classification boundaries,
+reconcile's win/skip/neutral detection, the last-item-no-next-timestamp
+deferral + multi-pass watermark advance, score deltas/clamps, soft-ban
+set on the DecklingAir-ported threshold, soft-ban time expiry (both
+directions — still-active and lapsed), the rolling time-of-day average,
+and score-weighted pool shaping (a heavily-down-scored artist and a
+soft-banned track both proven absent from an ACTUAL `buildQueue()` output,
+not just the shaped pool).
+
+**Graceful-degrade, verified live at `http://127.0.0.1:5208/?local=1`:**
+Settings' Cloud sync section rendered correctly signed-out (pill "Off",
+sign-in form visible, sign-out button hidden) with zero console output —
+no noisy Supabase errors despite the schema not being run and no user
+existing yet. A full Chilled mood drive and a Just Play drive both stocked
+and confirmed cleanly through the new pool-shaping path (5-track queues
+both times), Just Play correctly showed "Still learning your usual taste —
+using a balanced mix for now." (no tod profile exists yet), and
+`recordDriveHistory()` fired its silent-skip path with no console noise
+either. Console stayed empty (not just error-free) through the whole
+flow. Did NOT attempt any real Spotify or Supabase sign-in, per the hard
+rule — cloud sign-in's success path (and its failure-toast path) are
+built and code-reviewed, not live-exercised.
+
+**Everything still waiting on Megan / a live pass (not verified this
+session):** running `supabase/schema.sql` in the dashboard; turning
+"Confirm email" OFF; creating her one Supabase user; her first cloud
+sign-in (tests the real synthetic-email login round-trip, token refresh
+against a real session, and the schema-missing-vs-real-error detection
+against real PostgREST responses); a real reconcile pass against her
+actual recently-played history (the reconcile MATH is unit-tested against
+mocked timelines, but never run against real Spotify data with real gaps/
+skips); registering this project with her `supabase-keepalive-396`
+pinger worker so it doesn't auto-pause.
+
+## Previous state (build session 4a — six moods, seed resolver, scan progress)
 
 Home now has SIX mood tiles (2×3 grid), her real seed-song lists are wired
 into a fuzzy-matching resolver + review UI, and the first-scan "tiles look

@@ -8,6 +8,8 @@
 import * as api from './api.js';
 import * as spotifyAuth from './spotify-auth.js';
 import * as seedResolver from './seed-resolver.js';
+import * as cloudSync from './cloud-sync.js';
+import * as learning from './learning.js';
 import { buildQueue, averageFeatures } from './flow-order.js';
 import {
   MOOD_PRESETS,
@@ -63,6 +65,7 @@ let scanState = { active: false, done: 0, total: 0 };
 init();
 
 async function init() {
+  cloudSync.setToastHandler(showToast);
   wireStaticControls();
   startClock();
   renderMoodTiles();
@@ -105,6 +108,21 @@ async function init() {
         maybeOfferReviewBanner(result.pending);
       })
       .catch((err) => console.error('Shotgun: seed resolution pass failed', err));
+  }
+
+  // Fire-and-forget, non-blocking: never delay the mood tiles (already
+  // rendered above). Pull whatever cloud taste data exists (a no-op if
+  // she's not signed in to cloud sync, or the schema hasn't been run yet —
+  // both handled silently inside js/cloud-sync.js), THEN reconcile
+  // recently-played against it, THEN top up the feature-cache and
+  // resolved-seed cloud mirrors. Each step degrades gracefully on its own,
+  // so a failure partway through never blocks the rest of the app.
+  if (api.hasSpotifyAuth()) {
+    learning
+      .pullCloudTasteIntoLocal()
+      .then(() => learning.runReconcile())
+      .then(() => Promise.allSettled([cloudSync.syncFeatureCache(), cloudSync.syncResolvedSeeds()]))
+      .catch((err) => console.warn('Shotgun: background learning/sync pass failed', err));
   }
 }
 
@@ -174,6 +192,7 @@ function wireStaticControls() {
   document.getElementById('btn-open-settings').addEventListener('click', () => {
     showView('view-settings');
     renderSpotifyAccountPanel();
+    renderCloudSyncPanel();
   });
   document.getElementById('btn-close-settings').addEventListener('click', () => showView('view-home'));
   document.getElementById('btn-plan-another').addEventListener('click', () => showView('view-home'));
@@ -224,6 +243,38 @@ function wireStaticControls() {
   });
 
   document.getElementById('seed-clear').addEventListener('click', clearSeed);
+
+  document.getElementById('btn-cloud-signin').addEventListener('click', async () => {
+    const usernameEl = document.getElementById('cloud-username');
+    const passwordEl = document.getElementById('cloud-password');
+    const username = usernameEl.value.trim();
+    const password = passwordEl.value;
+    if (!username || !password) {
+      showToast('Enter a username and password.');
+      return;
+    }
+    const result = await cloudSync.signIn(username, password);
+    if (result.ok) {
+      passwordEl.value = '';
+      showToast('Cloud sync connected.');
+      renderCloudSyncPanel();
+      // Fresh sign-in: pull whatever cloud data already exists (e.g. a
+      // returning device) before anything else touches learning state.
+      learning
+        .pullCloudTasteIntoLocal()
+        .then(() => Promise.allSettled([cloudSync.syncFeatureCache(), cloudSync.syncResolvedSeeds()]))
+        .then(() => renderCloudSyncPanel())
+        .catch((err) => console.warn('Shotgun: post-sign-in cloud sync failed', err));
+    } else {
+      showToast(result.error || 'Could not sign in.');
+    }
+  });
+
+  document.getElementById('btn-cloud-signout').addEventListener('click', () => {
+    cloudSync.signOut();
+    showToast('Signed out of cloud sync. Local data stays put.');
+    renderCloudSyncPanel();
+  });
 }
 
 // ---------- Clock ----------
@@ -490,7 +541,18 @@ async function startMoodDrive(moodId) {
   const n = songsForMinutes(driveMinutes);
   const anchor = resolveMoodAnchor(moodId, preset);
 
-  const ordered = buildQueue(candidatePool, {
+  // Score-weighted selection (session 4b): avoided-artist / soft-banned
+  // tracks are dropped from the pool BEFORE buildQueue ever sees them —
+  // flow-order.js itself is untouched. familiarityWeighted moods (Feel Good
+  // Vibes) also get a real `familiarity` field per track here, from
+  // reconciled play counts — the same field flow-order.js's
+  // effectiveDistance() already reads, so nothing there needed to change.
+  const tasteState = learning.loadLocalTasteState();
+  const shapedPool = learning.shapePoolForDrive(candidatePool, tasteState, {
+    familiarityWeighted: preset.familiarityWeighted,
+  });
+
+  const ordered = buildQueue(shapedPool, {
     anchor,
     n,
     filters: preset.filters,
@@ -523,7 +585,18 @@ async function startSeedDrive(seedTrack) {
     console.warn('Shotgun: could not resolve the seed track’s own audio features', err);
   }
 
-  const ordered = buildQueue(candidatePool, {
+  const tasteState = learning.loadLocalTasteState();
+  let shapedPool = learning.shapePoolForDrive(candidatePool, tasteState);
+  // A song SHE explicitly picked to anchor this drive on always gets in,
+  // even if its artist is currently down-scored elsewhere — a direct pick
+  // is a stronger signal than a durable average, and shapePoolForDrive
+  // would otherwise be able to filter out the very track mustInclude below
+  // is trying to force a slot for.
+  if (!shapedPool.some((t) => t.id === anchorTrack.id)) {
+    shapedPool = [...shapedPool, anchorTrack];
+  }
+
+  const ordered = buildQueue(shapedPool, {
     anchor: anchorTrack,
     n,
     // Only actually forces a lead-in slot if the seed is part of
@@ -543,14 +616,26 @@ async function startSeedDrive(seedTrack) {
 }
 
 async function startJustPlayDrive() {
-  // TODO (session 4): replace with the learned time-of-day profile from
-  // Supabase. For now this is an honest stub — no mood filter, anchor
-  // defaults to the library's own centroid (a "balanced mix"), still
-  // flow-ordered and still varies drive to drive.
-  showToast('Taste learning arrives in a later build — using a balanced mix for now.');
+  // Real now (session 4b): anchors on the current time-of-day bucket's
+  // learned vector once reconcile has actually produced one (rolled from
+  // tracks that played THROUGH during that bucket — see js/learning.js's
+  // rollTodVector). Falls back to the pool's own centroid ("balanced mix")
+  // until there's enough history for that bucket, same honest stub
+  // behaviour as before.
+  const tasteState = learning.loadLocalTasteState();
+  const bucket = learning.bucketForDate(new Date());
+  const profile = tasteState.todProfiles[bucket];
+  const hasLearnedProfile = !!profile && profile.sampleCount > 0;
+  const anchor = hasLearnedProfile ? profile.target : null;
 
+  if (!hasLearnedProfile) {
+    showToast('Still learning your usual taste — using a balanced mix for now.');
+  }
+
+  const shapedPool = learning.shapePoolForDrive(candidatePool, tasteState);
   const n = songsForMinutes(driveMinutes);
-  const ordered = buildQueue(candidatePool, {
+  const ordered = buildQueue(shapedPool, {
+    anchor,
     n,
     varietySeed: `justplay-${Date.now()}`,
   });
@@ -559,7 +644,9 @@ async function startJustPlayDrive() {
     kind: 'justPlay',
     label: 'Just Play',
     accentVar: '--amber',
-    subtitle: `Building a balanced mix · ${driveMinutes} min · ${ordered.length} songs`,
+    subtitle: hasLearnedProfile
+      ? `Building your usual ${bucket} mix · ${driveMinutes} min · ${ordered.length} songs`
+      : `Building a balanced mix · ${driveMinutes} min · ${ordered.length} songs`,
   });
 }
 
@@ -599,6 +686,18 @@ async function runStockingFlow(orderedTracks, context) {
   // backend call above only needs to confirm success/failure.
   renderConfirm(orderedTracks, context);
   showView('view-confirm');
+
+  // Fire-and-forget, one place for every drive kind (mood/seed/Just Play) —
+  // silently skipped by cloud-sync.js if she's not signed in to cloud sync.
+  cloudSync
+    .recordDriveHistory({
+      kind: context.kind,
+      label: context.label,
+      minutes: driveMinutes,
+      trackIds: orderedTracks.map((t) => t.id),
+      timeBucket: learning.bucketForDate(new Date()),
+    })
+    .catch((err) => console.warn('Shotgun: drive-history log failed', err));
 }
 
 function renderConfirm(tracks, context) {
@@ -675,6 +774,44 @@ async function renderSpotifyAccountPanel() {
     console.warn('Shotgun: could not load the Spotify display name', err);
     hintEl.textContent = 'Connected (could not load your name right now)';
   }
+}
+
+// ---------- Cloud sync panel (Settings) ----------
+
+function renderCloudSyncPanel() {
+  const nameEl = document.getElementById('cloud-sync-name');
+  const hintEl = document.getElementById('cloud-sync-hint');
+  const pillEl = document.getElementById('cloud-sync-pill');
+  const formEl = document.getElementById('cloud-sync-form');
+  const signoutBtn = document.getElementById('btn-cloud-signout');
+
+  if (!cloudSync.isSupabaseConfigured()) {
+    nameEl.textContent = 'Cloud sync';
+    hintEl.textContent = 'Not set up yet';
+    pillEl.textContent = 'Unavailable';
+    pillEl.classList.remove('is-connected');
+    formEl.style.display = 'none';
+    signoutBtn.style.display = 'none';
+    return;
+  }
+
+  const signedIn = cloudSync.isSignedIn();
+  formEl.style.display = signedIn ? 'none' : 'flex';
+  signoutBtn.style.display = signedIn ? 'flex' : 'none';
+
+  if (!signedIn) {
+    nameEl.textContent = 'Cloud sync';
+    hintEl.textContent = 'Learning stays on this device only';
+    pillEl.textContent = 'Off';
+    pillEl.classList.remove('is-connected');
+    return;
+  }
+
+  nameEl.textContent = cloudSync.getSignedInUsername() || 'Signed in';
+  const last = cloudSync.getLastSyncedAt();
+  hintEl.textContent = last ? `Last synced ${new Date(last).toLocaleString()}` : 'Signed in — syncing…';
+  pillEl.textContent = 'On';
+  pillEl.classList.add('is-connected');
 }
 
 // ---------- View + toast helpers ----------

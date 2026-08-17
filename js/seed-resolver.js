@@ -373,3 +373,27 @@ export function skipReviewItem(itemId) {
   savePendingReviewItems(remaining);
   return remaining;
 }
+
+/**
+ * Merge cloud-pulled resolved seed ids into local storage — session 4b's
+ * Supabase pull. Deliberately additive-only (a per-mood UNION, deduped):
+ * never removes an id that's resolved locally even if it's momentarily
+ * absent from a cloud snapshot (e.g. mid-push from another device), so a
+ * network hiccup can't make a previously-resolved seed vanish locally. Not
+ * a literal storage-adapter swap (see js/cloud-sync.js's doc comment for
+ * why) — this module's storage stays synchronous and local; cloud-sync
+ * calls this after an async pull to fold the result in. Call
+ * applyResolvedSeedsToConfig() afterward to make the merge take effect on
+ * the live MOOD_SEEDS object.
+ * @param {Object<string,string[]>} cloudResolvedByMood
+ * @returns {object} the merged resolved-seeds object (mood -> track ids)
+ */
+export function mergeResolvedSeeds(cloudResolvedByMood) {
+  const local = getResolvedSeeds();
+  const merged = { ...local };
+  for (const [mood, ids] of Object.entries(cloudResolvedByMood || {})) {
+    merged[mood] = [...new Set([...(merged[mood] || []), ...(ids || [])])];
+  }
+  saveResolvedSeeds(merged);
+  return merged;
+}

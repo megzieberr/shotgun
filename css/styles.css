@@ -723,6 +723,30 @@ button {
   color: var(--teal);
 }
 
+/* ---------- Cloud sync (Settings) ---------- */
+
+.text-input {
+  width: 100%;
+  padding: 15px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(245, 241, 232, 0.14);
+  background: var(--panel-2);
+  color: var(--paper);
+  font-size: 16px;
+  font-family: var(--font-body);
+}
+
+.text-input::placeholder {
+  color: var(--haze);
+}
+
+.cloud-sync-form {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .about-line {
   font-family: var(--font-mono);
   font-size: 12px;

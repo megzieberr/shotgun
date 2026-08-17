@@ -67,3 +67,15 @@ export function putFeatures(featureMap) {
   }
   storage.save(all);
 }
+
+/**
+ * The whole cache as one plain object (id -> features|null) — session 4b's
+ * cloud-sync merge needs to enumerate everything local to know what's
+ * local-only vs. cloud-only; getFeatures() alone can't answer that since it
+ * requires the ids up front. Not used by any hot path — cheap regardless,
+ * since the whole cache is already one JSON blob.
+ * @returns {Object<string, object|null>}
+ */
+export function getAllCached() {
+  return storage.load();
+}
