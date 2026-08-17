@@ -6,10 +6,11 @@
 // in session 2.
 
 import * as api from './api.js';
-import { orderForFlow } from './flow-order.js';
+import { buildQueue, averageFeatures } from './flow-order.js';
 import {
   MOOD_PRESETS,
   MOOD_ORDER,
+  MOOD_SEEDS,
   DEFAULT_DRIVE_MINUTES,
   DRIVE_LENGTH_OPTIONS,
   songsForMinutes,
@@ -211,38 +212,42 @@ function clearSeed() {
 }
 
 // ---------- Drive builders ----------
+//
+// All three drive kinds route through flow-order.js's buildQueue — the real
+// selection + flow-ordering algorithm — rather than picking tracks here.
+// This file's job is just: work out the anchor + filters for the situation,
+// then hand off.
 
-function inRange(value, [min, max]) {
-  return value >= min && value <= max;
-}
-
-/** Nearest-neighbour pick by distance to an energy/valence centre point. */
-function pickByDistance(pool, center, n) {
-  const scored = pool
-    .map((t) => ({ t, d: Math.hypot(t.energy - center.energy, t.valence - center.valence) }))
-    .sort((a, b) => a.d - b.d);
-  return scored.slice(0, Math.min(n, pool.length)).map((s) => s.t);
+/**
+ * A mood's anchor is its static `target` vector UNLESS she's dropped real
+ * seed songs into MOOD_SEEDS for that mood — then the average of THOSE
+ * seed tracks' own features overrides it. Wired now; MOOD_SEEDS is empty
+ * for every mood today, so this always falls back to `preset.target` until
+ * she fills one in (see js/config.js).
+ */
+function resolveMoodAnchor(moodId, preset) {
+  const seedIds = MOOD_SEEDS[moodId] || [];
+  if (seedIds.length) {
+    const seedTracks = library.filter((t) => seedIds.includes(t.id));
+    if (seedTracks.length) return averageFeatures(seedTracks);
+  }
+  return preset.target;
 }
 
 async function startMoodDrive(moodId) {
   const preset = MOOD_PRESETS[moodId];
   const n = songsForMinutes(driveMinutes);
-  const center = {
-    energy: (preset.energy[0] + preset.energy[1]) / 2,
-    valence: (preset.valence[0] + preset.valence[1]) / 2,
-  };
+  const anchor = resolveMoodAnchor(moodId, preset);
 
-  const inBand = library.filter((t) => inRange(t.energy, preset.energy) && inRange(t.valence, preset.valence));
-  let selection;
-  if (inBand.length >= n) {
-    selection = pickByDistance(inBand, center, n);
-  } else {
-    // Not enough songs strictly inside the mood band for a long drive —
-    // widen to the whole library, nearest to the band centre first.
-    selection = pickByDistance(library, center, n);
-  }
+  const ordered = buildQueue(library, {
+    anchor,
+    n,
+    filters: preset.filters,
+    familiarityWeighted: preset.familiarityWeighted,
+    arc: preset.arc,
+    varietySeed: `${moodId}-${Date.now()}`,
+  });
 
-  const ordered = orderForFlow(selection, center);
   await runStockingFlow(ordered, {
     kind: 'mood',
     label: preset.label,
@@ -253,11 +258,14 @@ async function startMoodDrive(moodId) {
 
 async function startSeedDrive(seedTrack) {
   const n = songsForMinutes(driveMinutes);
-  const rest = library.filter((t) => t.id !== seedTrack.id);
-  const nearest = pickByDistance(rest, seedTrack, n - 1);
-  const selection = [seedTrack, ...nearest];
 
-  const ordered = orderForFlow(selection, seedTrack);
+  const ordered = buildQueue(library, {
+    anchor: seedTrack,
+    n,
+    mustInclude: [seedTrack.id], // the seed song itself always leads the drive
+    varietySeed: `seed-${seedTrack.id}-${Date.now()}`,
+  });
+
   await runStockingFlow(ordered, {
     kind: 'seed',
     label: `“${seedTrack.title}”`,
@@ -268,15 +276,17 @@ async function startSeedDrive(seedTrack) {
 
 async function startJustPlayDrive() {
   // TODO (session 4): replace with the learned time-of-day profile from
-  // Supabase. For now this is an honest stub — a balanced mix, evenly
-  // spread across the whole library rather than one mood band.
+  // Supabase. For now this is an honest stub — no mood filter, anchor
+  // defaults to the library's own centroid (a "balanced mix"), still
+  // flow-ordered and still varies drive to drive.
   showToast('Taste learning arrives in a later build — using a balanced mix for now.');
 
   const n = songsForMinutes(driveMinutes);
-  const shuffled = [...library].sort(() => Math.random() - 0.5);
-  const selection = shuffled.slice(0, Math.min(n, shuffled.length));
+  const ordered = buildQueue(library, {
+    n,
+    varietySeed: `justplay-${Date.now()}`,
+  });
 
-  const ordered = orderForFlow(selection, null);
   await runStockingFlow(ordered, {
     kind: 'justPlay',
     label: 'Just Play',

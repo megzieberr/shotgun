@@ -10,6 +10,8 @@
 
 import { LocalBackend } from './backends/local-backend.js';
 import { SpotifyBackend } from './backends/spotify-backend.js';
+import { getFeatures, putFeatures } from './feature-cache.js';
+import { getAudioFeaturesBatch } from './reccobeats.js';
 
 function hasSpotifyAuth() {
   // TODO session 2: check for a valid (or refreshable) token in localStorage.
@@ -50,7 +52,61 @@ export function stockQueue(trackIds) {
   return backend.stockQueue(trackIds);
 }
 
-/** @param {string[]} trackIds @returns {Promise<Object<string,{energy:number,valence:number,tempo:number}>>} */
-export function getAudioFeatures(trackIds) {
-  return backend.getAudioFeatures(trackIds);
+/**
+ * Look up audio features for a list of track ids, routed:
+ *   1. feature-cache first (looked up once, cached forever)
+ *   2. whatever's still missing goes to the active backend — for the local
+ *      backend this answers instantly from its mock library (no network);
+ *      for the Spotify backend this yields nothing, since Spotify's own
+ *      audio-features endpoint is the one ReccoBeats exists to replace
+ *   3. whatever's STILL missing goes to ReccoBeats — the path real Spotify
+ *      track ids actually take once a real backend is wired up
+ * Every new result (including confirmed-unknown -> null) is cached before
+ * returning, so a track is only ever looked up once.
+ * @param {string[]} trackIds
+ * @returns {Promise<Object<string,{energy:number,valence:number,tempo:number,danceability?:number,acousticness?:number}|null>>}
+ */
+export async function getAudioFeatures(trackIds) {
+  const ids = [...new Set((trackIds || []).filter(Boolean))];
+  const out = {};
+  if (!ids.length) return out;
+
+  const { found, missing } = getFeatures(ids);
+  for (const [id, features] of found) {
+    if (features) out[id] = features;
+  }
+  if (!missing.length) return out;
+
+  const toCache = new Map();
+  let backendFeatures = {};
+  try {
+    backendFeatures = (await backend.getAudioFeatures(missing)) || {};
+  } catch (err) {
+    // Expected for the Spotify backend until session 2+ wires it (and even
+    // then, Spotify's audio-features endpoint is dead) — non-fatal, falls
+    // through to ReccoBeats below.
+    console.warn('Shotgun: backend.getAudioFeatures failed, falling back to ReccoBeats', err);
+  }
+
+  const stillMissing = [];
+  for (const id of missing) {
+    if (backendFeatures[id]) {
+      out[id] = backendFeatures[id];
+      toCache.set(id, backendFeatures[id]);
+    } else {
+      stillMissing.push(id);
+    }
+  }
+
+  if (stillMissing.length) {
+    const reccoFeatures = await getAudioFeaturesBatch(stillMissing);
+    for (const id of stillMissing) {
+      const features = reccoFeatures[id] || null;
+      out[id] = features;
+      toCache.set(id, features);
+    }
+  }
+
+  putFeatures(toCache);
+  return out;
 }
