@@ -10,7 +10,39 @@ decided before she pulls off and nothing needs touching mid-drive.
 Full product brief: `C:\Users\megzi\Desktop\drive-dj-BRIEF.md` (app was
 named "Drive DJ" there; renamed Shotgun before this build).
 
-## Current state (build session 4b — Supabase + the learning loop)
+## Current state — SHIPPED & LIVE 2026-08-17 (foreman close-out)
+
+**Live:** https://megzieberr.github.io/shotgun/ (public repo `megzieberr/shotgun`,
+Pages main/root, sw `shotgun-v7` confirmed serving; root-commit author rewritten to
+her noreply address BEFORE first push, so no personal email in public history).
+
+Everything below this section is per-session build history — accurate but superseded
+where it says "not yet run/verified". End-of-day truth:
+
+- Supabase project `shotgun` (`jgcutvnmmehqpskpvmzy`, whenworks account free slot) —
+  schema APPLIED by foreman on her "run it" + migration-check PASSED (all 6 tables
+  RLS-on, anon blocked, keepalive() pinned + anon-exec). Her user `megan@shotgun.app`
+  exists (after a wrong-project detour into when-works — cleaned up), cloud sync ON,
+  first sync verified in-DB: 218 track_features, 52 auto-accepted mood_seeds.
+- Spotify E2E verified live by Megan on 127.0.0.1: login, 200-track library scan,
+  ReccoBeats features, real queue landed in her Spotify app (Pumped Up drive).
+- All 61 tests green (fresh foreman runs each round).
+
+**Pending on Megan (in order):**
+1. 📱 ~5 min — open the LIVE url on her phone, log in to Spotify + cloud sync
+   (username `megan`), then Add to Home Screen (PWA install).
+2. 📱 ~10 min — Review seed songs (gear → Review seed songs): ~30 uncertain
+   matches awaiting her accept/skip.
+3. 💻 2 min, whenever — register `shotgun` with the supabase-keepalive-396 pinger
+   fleet (its `keepalive()` RPC already matches the convention).
+
+**Next session (after ~a week of real drives):** the tuning pass her "too fast?"
+instinct asked for — read drive_history + taste tables against reality, tune
+resolver thresholds/60% skip cutline, decide raising the 200-song library cap,
+fix the sign-in papercut (strip a typed @domain), then consider v3 (Discover
+Weekly weaving + freshness dial). Read MOOD-SEEDS.md + Rulings first.
+
+## Build history: session 4b — Supabase + the learning loop
 
 The Supabase layer and the taste-learning loop (the brief's v2) are built.
 **Nothing has been through a real Supabase schema/user/login yet** — same
