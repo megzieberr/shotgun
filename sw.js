@@ -8,7 +8,7 @@
 // sub-path (/shotgun/) and the service worker's own scope resolves them
 // correctly from wherever it's registered.
 
-const CACHE_NAME = 'shotgun-v1';
+const CACHE_NAME = 'shotgun-v2';
 
 const PRECACHE_FILES = [
   'index.html',
