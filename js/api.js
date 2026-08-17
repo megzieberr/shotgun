@@ -59,6 +59,20 @@ export function searchTracks(query) {
   return getBackend().searchTracks(query);
 }
 
+/**
+ * Resolve an artist by name, then fetch their top tracks — used by
+ * js/seed-resolver.js for "everything by X" mood artist wildcards (e.g.
+ * Billie Eilish -> chilled). The local backend answers from whatever of its
+ * 40-song mock library loosely matches the artist name (usually nothing —
+ * the mock library doesn't carry her real wildcard artists); that's an
+ * accepted mock-data gap for local/offline testing, not a bug.
+ * @param {string} artistName
+ * @returns {Promise<Array>} up to ~10 top tracks
+ */
+export function searchArtistTopTracks(artistName) {
+  return getBackend().searchArtistTopTracks(artistName);
+}
+
 /** @param {number} [limit] @returns {Promise<Array>} recently-played items, newest first */
 export function getRecentlyPlayed(limit) {
   return getBackend().getRecentlyPlayed(limit);
@@ -186,6 +200,15 @@ export function keepTracksWithFeatures(tracks, featuresById) {
   return out;
 }
 
+// A first library scan (~200 tracks through ReccoBeats) takes minutes and
+// was silent until this session (she hit the dead-end live) — resolving in
+// small chunks, reporting progress after each one, is what lets the UI show
+// "Getting to know your library… 43 of 200" instead of going quiet. A
+// fully-cached re-scan resolves each chunk near-instantly (getAudioFeatures'
+// cache hit path), so the same code path naturally "barely flashes" on
+// repeat opens instead of needing a separate fast path.
+const CANDIDATE_POOL_CHUNK_SIZE = 10;
+
 /**
  * Resolve audio features for a track list (via getAudioFeatures — cache ->
  * backend -> ReccoBeats, same path everything else uses) and return ONLY
@@ -193,11 +216,29 @@ export function keepTracksWithFeatures(tracks, featuresById) {
  * app.js calls once per library load (and once per picked seed track) to
  * turn a raw library/search result into a pool buildQueue can safely use.
  * @param {Array<{id:string}>} tracks
+ * @param {object} [options]
+ * @param {(done:number, total:number)=>void} [options.onProgress] - called
+ *   after every chunk resolves, so a caller can render "N of total".
+ * @param {number} [options.chunkDelayMs=0] - QA-only: an artificial pause
+ *   between chunks so a slow scan can be demoed/DOM-verified without a real
+ *   200-track library. Wired to `?slowscan=<ms>` in app.js; never set in
+ *   production use. Zero (default) adds no delay at all.
  * @returns {Promise<Array<object>>}
  */
-export async function resolveCandidatePool(tracks) {
+export async function resolveCandidatePool(tracks, options = {}) {
+  const { onProgress, chunkDelayMs = 0 } = options;
   const list = tracks || [];
   if (!list.length) return [];
-  const featuresById = await getAudioFeatures(list.map((t) => t.id));
+
+  const total = list.length;
+  const featuresById = {};
+  for (let i = 0; i < list.length; i += CANDIDATE_POOL_CHUNK_SIZE) {
+    const chunk = list.slice(i, i + CANDIDATE_POOL_CHUNK_SIZE);
+    const chunkFeatures = await getAudioFeatures(chunk.map((t) => t.id));
+    Object.assign(featuresById, chunkFeatures);
+    if (onProgress) onProgress(Math.min(i + chunk.length, total), total);
+    if (chunkDelayMs) await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
+  }
+
   return keepTracksWithFeatures(list, featuresById);
 }

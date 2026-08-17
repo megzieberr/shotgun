@@ -8,7 +8,7 @@
 // sub-path (/shotgun/) and the service worker's own scope resolves them
 // correctly from wherever it's registered.
 
-const CACHE_NAME = 'shotgun-v5';
+const CACHE_NAME = 'shotgun-v6';
 
 const PRECACHE_FILES = [
   'index.html',
@@ -22,6 +22,8 @@ const PRECACHE_FILES = [
   'js/feature-cache.js',
   'js/spotify-auth.js',
   'js/spotify-client.js',
+  'js/seed-resolver.js',
+  'js/mood-seeds-data.js',
   'js/backends/local-backend.js',
   'js/backends/spotify-backend.js',
   'icons/icon-192.png',

@@ -10,7 +10,162 @@ decided before she pulls off and nothing needs touching mid-drive.
 Full product brief: `C:\Users\megzi\Desktop\drive-dj-BRIEF.md` (app was
 named "Drive DJ" there; renamed Shotgun before this build).
 
-## Current state (build session — Spotify plumbing: PKCE auth + 429 breaker)
+## Current state (build session 4a — six moods, seed resolver, scan progress)
+
+Home now has SIX mood tiles (2×3 grid), her real seed-song lists are wired
+into a fuzzy-matching resolver + review UI, and the first-scan "tiles look
+ready but taps dead-end" bug she hit live is fixed with real progress
+feedback. **No Supabase in this session — session 4b's job.**
+
+**New moods (config.js, css/styles.css, app.js):**
+- `singalong` renamed to `feelGood` everywhere (config key, MOOD_SEEDS key,
+  CSS `--mood-singalong` -> `--mood-feel-good`, ICONS key) — same lane, same
+  vector, just the label/key rename per her 2026-08-17 ruling
+  (MOOD-SEEDS.md).
+- `headBumping` (Head Bumping — metal/rage: Pantera, Linkin Park, Maximum
+  The Hormone): target energy 0.88 / valence 0.35 / tempo 155 / danceability
+  0.52 / acousticness 0.06; filters energy [0.70,1.00] / acousticness
+  [0.00,0.40] — the two dims her brief specified, deliberately nothing more
+  until real resolved seeds refine it. Accent `#e0284f` (deep crimson, new).
+- `afrikaansRap` (Afrikaans Rap — the local lane): target energy 0.70 /
+  valence 0.60 (her brief's stated fallback, used until real seeds resolve),
+  `filters: null` — deliberately loose, this mood is SEED/ARTIST-driven per
+  her brief, not vector-driven. Accent `#a8bd4a` (dusty olive-gold, new).
+- `MOOD_ORDER` is now `[chilled, feelGood, pumped, sadGangster,
+  headBumping, afrikaansRap]` — six tiles, 2 columns × 3 rows (CSS already
+  did this with no layout change needed: `grid-template-columns: 1fr 1fr`
+  auto-wraps 6 items to 3 rows). Verified at 375×812 (browser DOM, not
+  screenshot — this pane's known rAF/timer limitations, see below): no
+  horizontal overflow, every tile ≥128px tall (min rule was 96px), grid
+  bottom sits at y=589 of an 812-tall viewport — fully above the fold, no
+  scroll needed even before Just Play/seed search/length chips.
+- Local-mode smoke test: Head Bumping and Afrikaans Rap both queue
+  successfully against the 40-song mock library (which has no metal or
+  Afrikaans tracks) via nearest-fit fallback — Head Bumping's high-energy/
+  low-acousticness filters pulled from the mock "Pumped Up" zone
+  (Ignition/Overdrive/Redline etc.); Afrikaans Rap's loose filters + fallback
+  target pulled a Pumped-Up/Feel-Good-Vibes mix. Both are honest, expected
+  outcomes of real filters against fake data, not bugs — will look different
+  once her real seeds are resolved against her real library.
+
+**Seed data + resolver (new files):**
+- `js/mood-seeds-data.js` — her full MOOD-SEEDS.md list transcribed
+  verbatim: 84 entries across the six moods (`{raw, bestGuess?, note?,
+  unsure?}` each) + the two artist wildcards (Billie Eilish + Taylor Swift ->
+  chilled, Juice WRLD -> sadGangster). Afrikaans-grep EXEMPT (data, her
+  music, not UI copy) — confirmed via a repo-wide Afrikaans-word grep that
+  this file and MOOD-SEEDS.md are the only hits, and this file's hit is
+  legitimately song/artist data.
+- `js/seed-resolver.js` — the matching + orchestration engine:
+  - Pure matching (`parseEntryQuery`, `scoreCandidate`, `classifyEntry`):
+    normalizes case/punctuation/diacritics, Levenshtein-based similarity
+    weighted 70% title / 30% artist, `AUTO_ACCEPT_THRESHOLD = 0.82`. An
+    `unsure`-flagged row (her own MOOD-SEEDS.md flags) NEVER auto-accepts
+    regardless of score — always queued for her review. Unit-tested in
+    `tests/seed-resolver.test.mjs` (9 tests) against mocked search results,
+    including her actual typo cases ("Sweet Dreans"/"Satusfaction" — both
+    auto-accept once compared to their bestGuess-corrected form) and the
+    unsure-never-auto-accepts rule (tested against a PERFECT-score mock
+    match to prove the flag, not the score, is what's gating it).
+  - Orchestration (`resolveAllMoodSeeds`): per mood, searches each entry
+    (via `api.searchTracks`) and each artist wildcard (via the new
+    `api.searchArtistTopTracks` -> backend `searchArtistTopTracks()`,
+    implemented on both LocalBackend — loose mock-library match — and
+    SpotifyBackend — GET /v1/search?type=artist then GET
+    /v1/artists/{id}/top-tracks?market=ZA), classifies, and persists:
+    auto-accepted ids merge into `shotgun.moodSeeds.resolved.v1`
+    (localStorage, keyed by mood), everything else into
+    `shotgun.moodSeeds.pendingReview.v1`. Artist wildcard results cache
+    forever in `shotgun.moodSeeds.artistCache.v1` (keyed by lowercased
+    artist name) — the "once-ever cost" the brief asked for: a re-run
+    re-searches every SONG entry (cheap to re-run, not currently gated
+    beyond hasResolvedOnce()) but never re-fetches an artist's top tracks
+    twice.
+  - Storage is a small swappable adapter (`setStorageAdapter`, same pattern
+    as `js/feature-cache.js`) — session 4b's Supabase seam, per the brief.
+  - `applyResolvedSeedsToConfig()` mutates the live `MOOD_SEEDS` object
+    from config.js in place (same singleton instance app.js already reads
+    in `resolveMoodAnchor()`) — called on every boot (so a resolved seed
+    from a previous session affects the very first drive) and again after
+    every review-card accept/skip.
+- **app.js wiring:** on boot, `hasSpotifyAuth() && !hasResolvedOnce()`
+  fires `resolveAllMoodSeeds()` in the background (no UI block, no progress
+  strip — only the library scan gets one, per the brief); when it finishes,
+  if it left anything pending, a one-time home-screen banner offers
+  "Review now" (gated by `hasOfferedReview()` so it truly only ever offers
+  once — Settings' "Review seed songs" stays available regardless, always).
+- **Review UI** (`view-review`, wired from Settings and the banner): one
+  card at a time — mood tag, best match (or an honest "No confident match
+  found" + the search query when nothing scored), her original raw entry
+  for context, Accept/Skip, and up to 2 alternative matches as their own
+  tappable rows. DOM-verified end to end with seeded mock pending items:
+  card 1 (has a best match + 1 alternative) -> Accept -> id persisted into
+  `resolved.headBumping` -> card 2 (no confident match, no Accept button,
+  Skip only) -> Skip -> empty state ("All caught up…"). All buttons reuse
+  the existing `.btn`/`.btn-primary`/`.btn-secondary` classes, so every tap
+  target is ≥56px tall for free (well over the 44px rule).
+
+**Scan progress (the bug she hit live today):**
+- `js/api.js`'s `resolveCandidatePool(tracks, {onProgress, chunkDelayMs})`
+  now resolves in chunks of 10 (was one big call) and reports `(done,
+  total)` after each chunk — verified directly (bypassing the UI/timers) by
+  calling it from the browser console with 23 fake track ids: progress
+  calls came back exactly `[10,23], [20,23], [23,23]`. A fully-cached
+  re-scan resolves each chunk near-instantly (same cache-hit path
+  `getAudioFeatures` already had), so this "barely flashes" on repeat opens
+  for free, no separate fast path needed. `chunkDelayMs` (default 0, wired
+  to `?slowscan=<ms>` in app.js) is a QA-only artificial pause for
+  demoing/verifying the strip without a real 200-track library — confirmed
+  it actually delays (a 12-fake-track / chunkDelayMs:200 call that should
+  take ~400ms took ~6.9s wall-clock in THIS pane specifically — see the
+  rAF/timer-throttling note below; the delay mechanism itself is standard
+  `setTimeout`, correct, just throttled harder than requested by this
+  particular pane).
+- `js/app.js`: home shows a slim `#scan-strip` ("Getting to know your
+  library… 43 of 200") while `refreshLibrary()` is scanning; `#mood-grid`
+  gets an `.is-warming` class (tiles dim + desaturate, stay tappable) for
+  the same duration. Tapping ANY drive-starting control
+  (mood tile / Just Play / "Stock this vibe") while scanning short-circuits
+  to an honest toast with the live count instead of starting a drive —
+  wired on all three entry points.
+- Known pane limitation, not a code defect: this Browser pane doesn't
+  composite frames (screenshots time out — "the Browser pane is not
+  displayed") and its timers appear heavily throttled (background-tab-style
+  coalescing), so a reliable WALL-CLOCK visual demo of the strip appearing/
+  disappearing wasn't achievable here. The chunking + progress-callback
+  logic itself was verified directly and deterministically (see above) —
+  it'll behave normally in a real foregrounded tab (i.e. her phone in the
+  dock), where `setTimeout` isn't throttled like this.
+
+**Housekeeping:**
+- `sw.js`: added `js/seed-resolver.js` + `js/mood-seeds-data.js` to
+  PRECACHE_FILES, bumped `shotgun-v5` -> `shotgun-v6`.
+- Fixed one now-stale reference in `tests/flow-order.test.mjs`
+  (`MOOD_PRESETS.singalong` -> `MOOD_PRESETS.feelGood`) — the rename the
+  brief asked for ("everywhere") necessarily broke this hardcoded key; the
+  test's actual assertion (two variety seeds must differ) was not touched.
+- **Test results:** 35/35 passing (`node --test tests/flow-order.test.mjs
+  tests/stocking-filter.test.mjs tests/spotify-auth.test.mjs
+  tests/spotify-client.test.mjs tests/seed-resolver.test.mjs`) — the
+  original 34 plus 9 new `tests/seed-resolver.test.mjs` tests (pure
+  matching logic only; the orchestration/storage half touches
+  `window`/localStorage at call time the same way `api.js`'s
+  `resolveCandidatePool` does, so — same precedent as that function — it's
+  DOM-verified in the browser, not Node-unit-tested).
+
+**Everything still waiting on a real logged-in user (not live-verified this
+session):** the actual resolver pass against real Spotify search results —
+this session only proved the matching/scoring logic against MOCKED
+candidates and proved the orchestration's storage/wiring against SEEDED
+mock pending items; `searchArtistTopTracks()`'s real `/search?type=artist`
++ `/artists/{id}/top-tracks?market=ZA` calls (market=ZA is a reasonable
+guess for her SA account, not verified); the one-time review-offer banner
+firing for real (needs a real post-login resolution pass to actually leave
+pending items); whether 0.82 is the right AUTO_ACCEPT_THRESHOLD against her
+real Spotify search result quality (tuned by hand against the two typo
+cases in her list, not against a live search).
+
+## Previous state (build session — Spotify plumbing: PKCE auth + 429 breaker)
 
 Spotify auth, the 429-safe request breaker, and a real `spotify-backend.js`
 are now built and unit-verified — but **nothing has been through a real
@@ -75,18 +230,20 @@ search/Just Play, not the UI markup.
   list of what that covers. Load the app via `http://127.0.0.1:5208`
   (NOT `localhost:5208` — Spotify matches the redirect URI string exactly),
   click Settings → Connect Spotify, log in for real, then re-run a mood
-  drive and confirm a queue actually lands on the phone.
-- Session 4: Supabase schema (taste scores, time-of-day profiles, audio
-  features cache — swap `feature-cache.js`'s adapter — drive history) + the
-  learning loop that makes "Just Play" real.
-- Also waiting on Megan: real seed songs per mood for `MOOD_SEEDS` in
-  `js/config.js` — superseded by `MOOD-SEEDS.md`'s six-mood rulings
-  (2026-08-17); NOT this session's job to wire the new moods in, a later
-  session resolves her song lists to real track ids and rebuilds
-  `MOOD_PRESETS`/`MOOD_SEEDS`/`MOOD_ORDER` for six buttons.
+  drive and confirm a queue actually lands on the phone. **That first login
+  is also the first time the seed resolver actually runs for real** — watch
+  Settings for the "Review seed songs" flow, or the home-screen banner if
+  anything's left pending after the pass.
+- Session 4b: Supabase schema (taste scores, time-of-day profiles, audio
+  features cache — swap `feature-cache.js`'s adapter — drive history,
+  resolved-seed storage — swap `seed-resolver.js`'s adapter) + the learning
+  loop that makes "Just Play" real.
+- Six-mood ruling (2026-08-17, MOOD-SEEDS.md): DONE this session (4a) — see
+  "Current state" above for the full detail. Her real song lists resolve to
+  real track ids on first login; anything the resolver isn't confident about
+  waits in the review queue for her, never silently guessed.
 - Not done yet, deliberately out of this session's scope: any deploy, any
-  git remote, any Supabase project, any real (logged-in) Spotify call, any
-  mood-UI change for the new six-mood ruling.
+  git remote, any Supabase project, any real (logged-in) Spotify call.
 
 ## Session 3 notes (brain: flow ordering + ReccoBeats)
 
@@ -283,8 +440,11 @@ scaffold's original wiring, not introduced this session).
 
 - **English only.** No Afrikaans anywhere in this app — unlike her other
   (learner-facing) apps, this one is explicitly English-only.
-- **Mood button names (final):** Chilled, Singalong, Pumped Up, Sad
-  Gangster, plus "Just Play" as a fifth non-mood option.
+- **Mood button names (final, six-mood ruling 2026-08-17 — supersedes the
+  earlier four):** Chilled, Feel Good Vibes, Pumped Up, Sad Gangster, Head
+  Bumping, Afrikaans Rap, plus "Just Play" and "This vibe" (seed search) as
+  non-mood options alongside them. "Feel Good Vibes" replaced "Singalong"
+  (same lane/vector, renamed key `singalong` -> `feelGood`).
 - **Supabase** goes on the `whenworks` Supabase account's free project slot
   when session 4 needs it (per her note in the build brief) — do not create
   a new Supabase account for this.
@@ -314,7 +474,12 @@ scaffold's original wiring, not introduced this session).
   `Segoe UI`, numerals/data use `Cascadia Mono`/`Consolas`. If she wants a
   custom webfont later, self-hosting the font files is the way to add one
   without breaking the no-external-calls rule.
-- **Mood tiles get their own accent colour** (chilled = teal, singalong =
-  amber, pumped up = a hot coral-red, sad gangster = a dusky violet) rather
-  than one flat accent for all four — deliberate, keeps the "one tap"
+- **Mood tiles get their own accent colour** (chilled = teal, feel good
+  vibes = amber, pumped up = a hot coral-red, sad gangster = a dusky violet,
+  head bumping = a deep crimson, Afrikaans rap = a dusty olive-gold) rather
+  than one flat accent for all six — deliberate, keeps the "one tap"
   decision glanceable at a red light.
+- **Afrikaans-grep exemption:** `js/mood-seeds-data.js` and `MOOD-SEEDS.md`
+  are the only files allowed Afrikaans (or any other language) content —
+  it's her music, data not UI copy. Every other file stays English-only,
+  the app's hard rule; re-verify with a repo grep after touching seed data.

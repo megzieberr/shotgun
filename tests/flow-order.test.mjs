@@ -121,7 +121,7 @@ test('a seed track anchors the drive and always leads it', async () => {
 
 test('different variety seeds produce different drives for the same anchor', async () => {
   const lib = await library();
-  const preset = MOOD_PRESETS.singalong;
+  const preset = MOOD_PRESETS.feelGood; // renamed from `singalong` in the 2026-08-17 six-mood build
   const a = buildQueue(lib, { n: 8, anchor: preset.target, filters: preset.filters, varietySeed: 'seedA' });
   const b = buildQueue(lib, { n: 8, anchor: preset.target, filters: preset.filters, varietySeed: 'seedB' });
   const identical = a.length === b.length && a.every((t, i) => b[i] && b[i].id === t.id);

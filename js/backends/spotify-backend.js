@@ -84,6 +84,26 @@ export class SpotifyBackend {
     return (data.tracks?.items || []).map(normaliseTrack).filter(Boolean);
   }
 
+  /**
+   * Resolve an artist by name (GET /v1/search?type=artist), then their top
+   * tracks (GET /v1/artists/{id}/top-tracks) — used once-ever per artist
+   * wildcard by js/seed-resolver.js, which caches the result forever so
+   * this never runs twice for the same artist. `market=ZA` is a reasonable
+   * default for her (South African) account, not a Spotify requirement —
+   * fine to change once she's connected and it matters.
+   */
+  async searchArtistTopTracks(artistName) {
+    const q = (artistName || '').trim();
+    if (!q) return [];
+    const searchRes = await spotifyFetch(`/search?type=artist&limit=1&q=${encodeURIComponent(q)}`);
+    const searchData = await readJson(searchRes);
+    const artist = searchData.artists?.items?.[0];
+    if (!artist) return [];
+    const topRes = await spotifyFetch(`/artists/${artist.id}/top-tracks?market=ZA`);
+    const topData = await readJson(topRes);
+    return (topData.tracks || []).map(normaliseTrack).filter(Boolean);
+  }
+
   /** GET /v1/me/player/recently-played */
   async getRecentlyPlayed(limit = 20) {
     const res = await spotifyFetch(`/me/player/recently-played?limit=${Math.min(limit, 50)}`);

@@ -29,6 +29,19 @@
       </div>
     </div>
 
+    <div class="scan-strip" id="scan-strip" aria-live="polite">
+      <span class="scan-strip-text" id="scan-strip-text"></span>
+      <div class="scan-strip-track"><div class="scan-strip-fill" id="scan-strip-fill"></div></div>
+    </div>
+
+    <div class="seed-review-banner" id="seed-review-banner">
+      <span id="seed-review-banner-text"></span>
+      <div class="seed-review-banner-actions">
+        <button type="button" id="btn-review-now">Review now</button>
+        <button type="button" id="btn-review-dismiss" aria-label="Dismiss">&times;</button>
+      </div>
+    </div>
+
     <p class="section-label">Pick your drive's anchor</p>
     <div class="mood-grid" id="mood-grid">
       <!-- mood tiles injected by app.js from MOOD_PRESETS -->
@@ -120,7 +133,29 @@
       <button class="btn btn-secondary" id="btn-spotify-logout" type="button" style="width:100%;" disabled>Log out</button>
     </div>
 
+    <div class="settings-row">
+      <p class="settings-label">Seed songs</p>
+      <button class="btn btn-secondary" id="btn-review-seeds" type="button" style="width:100%;">Review seed songs</button>
+    </div>
+
     <p class="about-line" id="about-line">Shotgun · local data</p>
+  </section>
+
+  <!-- ================= REVIEW SEED SONGS ================= -->
+  <section id="view-review" class="view" aria-label="Review seed songs">
+    <div class="top-bar">
+      <button class="icon-btn" id="btn-close-review" aria-label="Back">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h2 style="font-size:19px;">Review seed songs</h2>
+      <span style="width:44px;"></span>
+    </div>
+
+    <p class="review-progress" id="review-progress"></p>
+    <div class="review-card" id="review-card"></div>
+    <div class="review-empty" id="review-empty" style="display:none;">
+      <p>All caught up — no seed songs waiting for review.</p>
+    </div>
   </section>
 
 </div>

@@ -100,6 +100,17 @@ export class LocalBackend {
     );
   }
 
+  /** Loose artist-name match against the 40-song mock library — real
+   * wildcard artists (Billie Eilish, Taylor Swift, Juice WRLD) aren't in it,
+   * so this usually returns nothing under ?local=1; that's expected, not a
+   * bug (the real lookup happens on the Spotify backend). */
+  async searchArtistTopTracks(artistName) {
+    await delay(60);
+    const q = (artistName || '').trim().toLowerCase();
+    if (!q) return [];
+    return clone(LIBRARY.filter((t) => t.artist.toLowerCase().includes(q)));
+  }
+
   async getRecentlyPlayed(limit = 20) {
     await delay(80);
     const sample = pickRandom(LIBRARY, Math.min(limit, LIBRARY.length));

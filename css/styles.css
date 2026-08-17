@@ -21,9 +21,11 @@
 
   /* --- Mood accents (derived roles, not new concepts) --- */
   --mood-chilled: var(--teal);
-  --mood-singalong: var(--amber);
+  --mood-feel-good: var(--amber);
   --mood-pumped: #ff6a5c;
   --mood-sad-gangster: #8f82f0;
+  --mood-head-bumping: #e0284f;
+  --mood-afrikaans-rap: #a8bd4a;
 
   /* --- Type --- */
   --font-display: 'Bahnschrift', 'Segoe UI Semibold', 'Arial Narrow', sans-serif;
@@ -768,6 +770,204 @@ button {
     animation: none;
     transform: scaleY(0.7);
   }
+}
+
+/* ---------- Scan progress strip (home) ---------- */
+
+.scan-strip {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  border: 1px solid rgba(255, 157, 63, 0.25);
+  margin-bottom: 16px;
+}
+
+.scan-strip.is-visible {
+  display: flex;
+}
+
+.scan-strip-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--haze);
+}
+
+.scan-strip-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(245, 241, 232, 0.10);
+  overflow: hidden;
+}
+
+.scan-strip-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--amber), var(--teal));
+  width: 0%;
+  transition: width 180ms ease;
+}
+
+.mood-grid.is-warming .mood-tile {
+  opacity: 0.5;
+  filter: grayscale(0.4);
+}
+
+/* ---------- Seed-review offer banner (home) ---------- */
+
+.seed-review-banner {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(52, 209, 196, 0.10);
+  border: 1px solid rgba(52, 209, 196, 0.35);
+  margin-bottom: 16px;
+  font-size: 13.5px;
+}
+
+.seed-review-banner.is-visible {
+  display: flex;
+}
+
+.seed-review-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.seed-review-banner-actions button {
+  border: none;
+  background: none;
+  color: var(--teal);
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 13.5px;
+  min-height: 32px;
+  padding: 6px;
+}
+
+#btn-review-dismiss {
+  color: var(--haze);
+  font-weight: 400;
+  font-size: 16px;
+  min-width: 32px;
+}
+
+/* ---------- Review seeds view ---------- */
+
+.review-progress {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--haze);
+  text-align: center;
+  margin: 4px 0 18px;
+}
+
+.review-card {
+  background: var(--panel);
+  border: 1px solid rgba(245, 241, 232, 0.10);
+  border-radius: var(--radius-lg);
+  padding: 22px 18px;
+}
+
+.review-mood-tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--amber);
+  background: rgba(255, 157, 63, 0.12);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.review-prompt {
+  font-family: var(--font-display);
+  font-size: 18px;
+  margin: 14px 0 10px;
+}
+
+.review-song {
+  margin-bottom: 6px;
+}
+
+.review-song-title {
+  font-weight: 700;
+  font-size: 17px;
+}
+
+.review-song-artist {
+  color: var(--haze);
+  font-size: 14px;
+  margin-top: 2px;
+}
+
+.review-song-none .review-song-title {
+  color: var(--haze);
+  font-weight: 600;
+}
+
+.review-source {
+  font-size: 12px;
+  color: var(--haze);
+  margin-top: 10px;
+  font-style: italic;
+}
+
+.review-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.review-actions .btn {
+  flex: 1;
+}
+
+.review-alt-list {
+  margin-top: 16px;
+  border-top: 1px solid rgba(245, 241, 232, 0.10);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.review-alt-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  border: 1px solid rgba(245, 241, 232, 0.08);
+  cursor: pointer;
+  min-height: 44px;
+  justify-content: center;
+}
+
+.review-alt-title {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.review-alt-artist {
+  font-size: 11.5px;
+  color: var(--haze);
+}
+
+.review-empty {
+  text-align: center;
+  color: var(--haze);
+  padding: 60px 20px;
+  font-size: 14px;
 }
 
 /* ---------- Small screens ---------- */

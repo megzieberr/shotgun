@@ -88,14 +88,15 @@ export const MOOD_PRESETS = {
     filters: { energy: [0.10, 0.40], valence: [0.35, 0.72] },
     familiarityWeighted: false,
   },
-  singalong: {
-    id: 'singalong',
-    label: 'Singalong',
+  feelGood: {
+    id: 'feelGood',
+    label: 'Feel Good Vibes',
     descriptor: 'Windows down, know every word',
-    icon: 'singalong',
-    accent: '--mood-singalong',
-    // Film/soundtrack + Taylor Swift — defining trait is she knows every
-    // word, hence familiarityWeighted (her ruling).
+    icon: 'feelGood',
+    accent: '--mood-feel-good',
+    // Renamed from "Singalong" (2026-08-17 six-mood ruling) — same lane,
+    // same target: film/soundtrack + Taylor Swift energy, defining trait is
+    // she knows every word, hence familiarityWeighted (her ruling).
     target: { energy: 0.60, valence: 0.86, tempo: 120, danceability: 0.56, acousticness: 0.18 },
     filters: { energy: [0.45, 0.76], valence: [0.65, 1.00] },
     familiarityWeighted: true,
@@ -130,22 +131,60 @@ export const MOOD_PRESETS = {
     },
     familiarityWeighted: false,
   },
+  headBumping: {
+    id: 'headBumping',
+    label: 'Head Bumping',
+    descriptor: 'Heavy riffs, all rage',
+    icon: 'headBumping',
+    accent: '--mood-head-bumping',
+    // New mood (2026-08-17 six-mood ruling) — the metal/rage lane (Pantera,
+    // Linkin Park, Maximum The Hormone per her seed list, MOOD-SEEDS.md).
+    // Vector bound to her brief: energy 0.88 / valence 0.35 / high tempo;
+    // danceability/acousticness are this session's best guess, not her
+    // ruling — refine once her real seeds resolve to real audio features.
+    target: { energy: 0.88, valence: 0.35, tempo: 155, danceability: 0.52, acousticness: 0.06 },
+    filters: { energy: [0.70, 1.00], acousticness: [0.00, 0.40] },
+    familiarityWeighted: false,
+  },
+  afrikaansRap: {
+    id: 'afrikaansRap',
+    label: 'Afrikaans Rap',
+    descriptor: 'Local bars, home turf',
+    icon: 'afrikaansRap',
+    accent: '--mood-afrikaans-rap',
+    // New mood (2026-08-17 six-mood ruling) — primarily SEED/ARTIST-driven,
+    // not vector-driven (her brief): `target` below is only the fallback
+    // used until real seeds resolve — resolveMoodAnchor() in js/app.js
+    // already averages resolved MOOD_SEEDS features over this whenever any
+    // exist for this mood, same generic mechanism every mood uses.
+    // `filters: null` is deliberate — loose on purpose, this mood leans on
+    // WHICH tracks get in (seeds + artist matches), not a feature band.
+    target: { energy: 0.70, valence: 0.60 },
+    filters: null,
+    familiarityWeighted: false,
+  },
 };
 
-export const MOOD_ORDER = ['chilled', 'singalong', 'pumped', 'sadGangster'];
+export const MOOD_ORDER = ['chilled', 'feelGood', 'pumped', 'sadGangster', 'headBumping', 'afrikaansRap'];
 
-// --- Mood seeds (hers to fill in) ---
-// Real seed songs per mood, supplied later. Empty for now. When a mood has
+// --- Mood seeds ---
+// Real seed songs per mood. These six arrays start empty and are populated
+// at runtime by js/seed-resolver.js's applyResolvedSeedsToConfig() (called
+// from app.js on boot) from whatever's already resolved in localStorage —
+// see js/mood-seeds-data.js for her raw song lists (MOOD-SEEDS.md) and the
+// resolver that turns them into real Spotify track ids. When a mood has
 // seed track IDs, the average of THOSE tracks' features overrides/refines
 // the static `target` vector above for that mood — see resolveMoodAnchor()
-// in js/app.js, which is already wired to check this and does nothing
-// (falls back to `target`) while the arrays stay empty.
+// in js/app.js.
 //
 // Keyed the same way as MOOD_PRESETS/MOOD_ORDER above (`pumped`, not
-// `pumpedUp`) so a dropped-in ID always lands on the mood it's meant for.
+// `pumpedUp`; `feelGood`, not `singalong`) so a resolved ID always lands on
+// the mood it's meant for.
 export const MOOD_SEEDS = {
   chilled: [],
-  singalong: [],
+  feelGood: [],
   pumped: [],
   sadGangster: [],
+  headBumping: [],
+  afrikaansRap: [],
 };

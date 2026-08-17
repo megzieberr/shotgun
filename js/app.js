@@ -7,6 +7,7 @@
 
 import * as api from './api.js';
 import * as spotifyAuth from './spotify-auth.js';
+import * as seedResolver from './seed-resolver.js';
 import { buildQueue, averageFeatures } from './flow-order.js';
 import {
   MOOD_PRESETS,
@@ -19,15 +20,24 @@ import {
 
 const SETTINGS_KEY = 'shotgun.settings.defaultMinutes';
 
+// QA-only: `?slowscan=<ms>` adds an artificial per-chunk delay to the
+// library scan so the progress strip can be demoed/verified without a real
+// 200-track library. Never set outside manual testing.
+const SLOWSCAN_MS = Number(new URLSearchParams(window.location.search).get('slowscan')) || 0;
+
 const ICONS = {
   chilled:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 9c1.5-1.5 3-1.5 4.5 0s3 1.5 4.5 0 3-1.5 4.5 0 3 1.5 4.5 0"/><path d="M3 15c1.5-1.5 3-1.5 4.5 0s3 1.5 4.5 0 3-1.5 4.5 0 3 1.5 4.5 0"/></svg>',
-  singalong:
+  feelGood:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v4"/><path d="M8 22h8"/></svg>',
   pumped:
     '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>',
   sadGangster:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h4l1.5 2h9L18 8h4"/><circle cx="6.5" cy="13" r="3.5"/><circle cx="17.5" cy="13" r="3.5"/><path d="M10 13h4"/></svg>',
+  headBumping:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12l3-8 3 16 3-16 3 16 3-16 3 8"/></svg>',
+  afrikaansRap:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s7-7.58 7-12.5A7 7 0 0 0 5 9.5C5 14.42 12 22 12 22z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
 };
 
 // ---------- State ----------
@@ -42,6 +52,12 @@ let candidatePool = [];
 let driveMinutes = loadDefaultMinutes();
 let selectedSeed = null;
 
+// The first library scan (~200 tracks through ReccoBeats) takes minutes and
+// was previously silent — she hit the dead-end live (tiles looked ready,
+// taps just toasted "no songs yet"). This tracks scan-in-progress state so
+// the home screen can show real progress instead of going quiet.
+let scanState = { active: false, done: 0, total: 0 };
+
 // ---------- Boot ----------
 
 init();
@@ -53,6 +69,12 @@ async function init() {
   renderLengthChips(document.getElementById('length-chips'), driveMinutes, onHomeLengthChange);
   renderLengthChips(document.getElementById('settings-length-chips'), driveMinutes, onSettingsLengthChange);
   updateDriveHint();
+
+  // Always apply whatever's already resolved from a previous session, even
+  // before the redirect/library work below — a resolved seed should affect
+  // the very first drive of THIS session too, not just ones after a fresh
+  // resolution pass.
+  seedResolver.applyResolvedSeedsToConfig();
 
   // MUST run before the first api.* call: a Spotify redirect can save fresh
   // tokens here, and api.js's backend selection is re-checked per call (not
@@ -68,15 +90,43 @@ async function init() {
 
   await refreshLibrary();
   renderSpotifyAccountPanel();
+
+  // Fire-and-forget: the once-ever seed resolution pass. Gated on real
+  // Spotify auth (there's no point burning search calls against the local
+  // mock library, which doesn't carry her real seed songs) AND on never
+  // having run before (hasResolvedOnce persists across sessions). Runs
+  // silently in the background — no progress UI per the brief, only the
+  // library scan gets one — and offers the review UI once when it's done.
+  if (api.hasSpotifyAuth() && !seedResolver.hasResolvedOnce()) {
+    seedResolver
+      .resolveAllMoodSeeds()
+      .then((result) => {
+        seedResolver.applyResolvedSeedsToConfig();
+        maybeOfferReviewBanner(result.pending);
+      })
+      .catch((err) => console.error('Shotgun: seed resolution pass failed', err));
+  }
 }
 
 /** (Re)loads the library from whichever backend is active and resolves it
  * into a buildQueue-safe candidate pool. Called on boot, after login, and
  * after logout (the backend — and therefore the library — changes each time). */
 async function refreshLibrary() {
+  scanState = { active: true, done: 0, total: 0 };
+  renderScanStrip();
   try {
     library = await api.getLibrary();
-    candidatePool = await api.resolveCandidatePool(library);
+    scanState.total = library.length;
+    renderScanStrip();
+
+    candidatePool = await api.resolveCandidatePool(library, {
+      onProgress: (done, total) => {
+        scanState = { active: true, done, total };
+        renderScanStrip();
+      },
+      chunkDelayMs: SLOWSCAN_MS,
+    });
+
     if (library.length && !candidatePool.length) {
       showToast('Songs are loaded, but none have known audio features yet — try again shortly.');
     }
@@ -85,7 +135,37 @@ async function refreshLibrary() {
     showToast('Could not load the song library.');
     library = [];
     candidatePool = [];
+  } finally {
+    scanState.active = false;
+    renderScanStrip();
   }
+}
+
+// ---------- Scan progress strip ----------
+
+function renderScanStrip() {
+  const strip = document.getElementById('scan-strip');
+  const grid = document.getElementById('mood-grid');
+  if (!scanState.active || scanState.total === 0) {
+    strip.classList.remove('is-visible');
+    grid.classList.remove('is-warming');
+    return;
+  }
+  document.getElementById('scan-strip-text').textContent =
+    `Getting to know your library… ${scanState.done} of ${scanState.total}`;
+  document.getElementById('scan-strip-fill').style.width =
+    `${Math.min(100, Math.round((scanState.done / scanState.total) * 100))}%`;
+  strip.classList.add('is-visible');
+  grid.classList.add('is-warming');
+}
+
+function isScanning() {
+  return scanState.active;
+}
+
+function scanToast() {
+  const count = scanState.total ? `${scanState.done} of ${scanState.total}` : 'a few';
+  showToast(`Still getting to know your library — ${count} songs so far. Try again in a moment.`, 3000);
 }
 
 // ---------- Static control wiring ----------
@@ -97,9 +177,27 @@ function wireStaticControls() {
   });
   document.getElementById('btn-close-settings').addEventListener('click', () => showView('view-home'));
   document.getElementById('btn-plan-another').addEventListener('click', () => showView('view-home'));
-  document.getElementById('btn-just-play').addEventListener('click', startJustPlayDrive);
+  document.getElementById('btn-just-play').addEventListener('click', () => {
+    if (isScanning()) return scanToast();
+    startJustPlayDrive();
+  });
   document.getElementById('btn-stock-seed').addEventListener('click', () => {
+    if (isScanning()) return scanToast();
     if (selectedSeed) startSeedDrive(selectedSeed);
+  });
+
+  document.getElementById('btn-review-seeds').addEventListener('click', () => {
+    showView('view-review');
+    renderReviewQueue();
+  });
+  document.getElementById('btn-close-review').addEventListener('click', () => showView('view-settings'));
+  document.getElementById('btn-review-now').addEventListener('click', () => {
+    document.getElementById('seed-review-banner').classList.remove('is-visible');
+    showView('view-review');
+    renderReviewQueue();
+  });
+  document.getElementById('btn-review-dismiss').addEventListener('click', () => {
+    document.getElementById('seed-review-banner').classList.remove('is-visible');
   });
 
   document.getElementById('btn-connect-spotify').addEventListener('click', () => {
@@ -160,7 +258,10 @@ function renderMoodTiles() {
       <span class="mood-descriptor">${preset.descriptor}</span>
       <span class="tile-underline" aria-hidden="true"></span>
     `;
-    btn.addEventListener('click', () => startMoodDrive(id));
+    btn.addEventListener('click', () => {
+      if (isScanning()) return scanToast();
+      startMoodDrive(id);
+    });
     grid.appendChild(btn);
   }
 }
@@ -257,6 +358,109 @@ function clearSeed() {
   document.getElementById('btn-stock-seed').style.display = 'none';
 }
 
+// ---------- Seed-song review UI ----------
+//
+// Reachable from Settings ("Review seed songs") any time, and auto-offered
+// ONCE via a home-screen banner right after the first resolution pass
+// finishes with pending items (maybeOfferReviewBanner). One card at a time,
+// big touch targets, Accept / Skip / pick-an-alternative.
+
+/** Shown once, right after the first-ever resolution pass, only if it left
+ * anything for her to check. hasOfferedReview() makes this a true one-time
+ * offer — dismissing (or reviewing) never brings it back; Settings' "Review
+ * seed songs" button stays available regardless. */
+function maybeOfferReviewBanner(pending) {
+  if (!pending || !pending.length || seedResolver.hasOfferedReview()) return;
+  document.getElementById('seed-review-banner-text').textContent =
+    `${pending.length} seed song${pending.length === 1 ? '' : 's'} need a quick check.`;
+  document.getElementById('seed-review-banner').classList.add('is-visible');
+  seedResolver.markReviewOffered();
+}
+
+function renderReviewQueue() {
+  const pending = seedResolver.getPendingReviewItems();
+  const progressEl = document.getElementById('review-progress');
+  const cardEl = document.getElementById('review-card');
+  const emptyEl = document.getElementById('review-empty');
+
+  if (!pending.length) {
+    progressEl.textContent = '';
+    cardEl.style.display = 'none';
+    cardEl.innerHTML = '';
+    emptyEl.style.display = 'block';
+    return;
+  }
+
+  emptyEl.style.display = 'none';
+  cardEl.style.display = 'block';
+
+  const item = pending[0];
+  progressEl.textContent = `${pending.length} song${pending.length === 1 ? '' : 's'} to check`;
+
+  const moodLabel = (MOOD_PRESETS[item.moodKey] && MOOD_PRESETS[item.moodKey].label) || item.moodKey;
+  const best = item.best;
+  const otherAlternatives = (item.alternatives || []).filter((alt) => !best || alt.id !== best.id);
+
+  cardEl.innerHTML = `
+    <p class="review-mood-tag">${escapeHtml(moodLabel)}</p>
+    <p class="review-prompt">Is this the one?</p>
+    ${
+      best
+        ? `<div class="review-song">
+             <div class="review-song-title">${escapeHtml(best.title)}</div>
+             <div class="review-song-artist">${escapeHtml(best.artist)}</div>
+           </div>`
+        : `<div class="review-song review-song-none">
+             <div class="review-song-title">No confident match found</div>
+             <div class="review-song-artist">${escapeHtml(item.query)}</div>
+           </div>`
+    }
+    <p class="review-source">From her list: “${escapeHtml(item.entry.raw)}”</p>
+    <div class="review-actions">
+      <button class="btn btn-secondary" id="review-skip-btn" type="button">Skip</button>
+      ${best ? '<button class="btn btn-primary" id="review-accept-btn" type="button">Accept</button>' : ''}
+    </div>
+    ${
+      otherAlternatives.length
+        ? `<div class="review-alt-list">
+            ${otherAlternatives
+              .map(
+                (alt, i) => `
+              <button class="review-alt-row" type="button" data-alt-index="${i}">
+                <span class="review-alt-title">${escapeHtml(alt.title)}</span>
+                <span class="review-alt-artist">${escapeHtml(alt.artist)}</span>
+              </button>`
+              )
+              .join('')}
+          </div>`
+        : ''
+    }
+  `;
+
+  document.getElementById('review-skip-btn').addEventListener('click', () => {
+    seedResolver.skipReviewItem(item.id);
+    renderReviewQueue();
+  });
+
+  const acceptBtn = document.getElementById('review-accept-btn');
+  if (acceptBtn) {
+    acceptBtn.addEventListener('click', () => {
+      seedResolver.acceptReviewItem(item.id, best);
+      seedResolver.applyResolvedSeedsToConfig();
+      renderReviewQueue();
+    });
+  }
+
+  cardEl.querySelectorAll('.review-alt-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      const chosen = otherAlternatives[Number(row.dataset.altIndex)];
+      seedResolver.acceptReviewItem(item.id, chosen);
+      seedResolver.applyResolvedSeedsToConfig();
+      renderReviewQueue();
+    });
+  });
+}
+
 // ---------- Drive builders ----------
 //
 // All three drive kinds route through flow-order.js's buildQueue — the real
@@ -265,11 +469,12 @@ function clearSeed() {
 // then hand off.
 
 /**
- * A mood's anchor is its static `target` vector UNLESS she's dropped real
- * seed songs into MOOD_SEEDS for that mood — then the average of THOSE
- * seed tracks' own features overrides it. Wired now; MOOD_SEEDS is empty
- * for every mood today, so this always falls back to `preset.target` until
- * she fills one in (see js/config.js).
+ * A mood's anchor is its static `target` vector UNLESS MOOD_SEEDS has real
+ * seed track ids for that mood — then the average of THOSE seed tracks'
+ * own features overrides it. MOOD_SEEDS starts empty every page load and is
+ * populated from localStorage by seed-resolver.js's
+ * applyResolvedSeedsToConfig() (called on boot, and again after every
+ * review-card accept/skip) — see js/config.js and js/seed-resolver.js.
  */
 function resolveMoodAnchor(moodId, preset) {
   const seedIds = MOOD_SEEDS[moodId] || [];
