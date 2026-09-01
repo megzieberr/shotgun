@@ -2,3 +2,7 @@
 Thumbs.db
 *.log
 .vscode/
+
+# Local session notes — never in a public repo
+PROJECT-STATUS.md
+PROJECT-HISTORY.md
