@@ -1,4 +1,4 @@
-# Shotgun — project status — updated 2026-09-01
+# Shotgun — project status — updated 2026-09-14 (PARKED, her call)
 
 A personal Spotify commute DJ. One tap before a drive stocks the Spotify queue with a
 flow-ordered set of songs — by mood, by a seed song's vibe, or by learned time-of-day taste — so
@@ -67,12 +67,17 @@ her noreply address before the first push, so no personal email sits in public h
 
 ## Pending on Megan
 
-1. 📱 ~5 min — open the LIVE url on her phone, log in to Spotify + cloud sync
-   (username `megan`), then Add to Home Screen (PWA install).
-2. 📱 ~10 min — Review seed songs (gear → Review seed songs): ~30 uncertain
-   matches awaiting her accept/skip.
-3. 💻 2 min, whenever — register `shotgun` with the supabase-keepalive-396 pinger
-   fleet (its `keepalive()` RPC already matches the convention).
+- Nothing until she un-parks it. (2026-09-14 Monday sweep, her call: Shotgun is PARKED. Do not
+  surface anything from this project in /pending or the weekly sweep until she brings it back.)
+
+**Parked steps, for when she un-parks** (checked 2026-09-14: the `shotgun` Supabase project is
+INACTIVE, i.e. auto-paused, and it is NOT in the cloud pinger's `keepalive.mjs` list):
+1. Restore the `shotgun` project on the whenworks Supabase account.
+2. Add it to the cloud pinger (`supabase-keepalive\netlify\functions\keepalive.mjs`) and redeploy,
+   or it will pause again. A laptop ping alone did not keep vraestel-vlaggies awake.
+3. 📱 ~5 min: open the LIVE url on her phone, log in to Spotify + cloud sync (username `megan`),
+   then Add to Home Screen.
+4. 📱 ~10 min: Review seed songs (gear → Review seed songs): ~30 uncertain matches awaiting her accept/skip.
 
 ## Next up
 
