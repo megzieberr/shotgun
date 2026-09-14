@@ -70,8 +70,10 @@ her noreply address before the first push, so no personal email sits in public h
 - Nothing until she un-parks it. (2026-09-14 Monday sweep, her call: Shotgun is PARKED. Do not
   surface anything from this project in /pending or the weekly sweep until she brings it back.)
 
-**Parked steps, for when she un-parks** (checked 2026-09-14: the `shotgun` Supabase project is
-INACTIVE, i.e. auto-paused, and it is NOT in the cloud pinger's `keepalive.mjs` list):
+## Parked steps (for when she un-parks)
+
+Checked 2026-09-14: the `shotgun` Supabase project is INACTIVE (auto-paused), and it is NOT in the
+cloud pinger's `keepalive.mjs` list.
 1. Restore the `shotgun` project on the whenworks Supabase account.
 2. Add it to the cloud pinger (`supabase-keepalive\netlify\functions\keepalive.mjs`) and redeploy,
    or it will pause again. A laptop ping alone did not keep vraestel-vlaggies awake.
