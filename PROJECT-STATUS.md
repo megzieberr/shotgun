@@ -1,5 +1,17 @@
 # Shotgun — project status — updated 2026-09-14 (PARKED, her call)
 
+> **RETIRED 2026-10-01, kept as a skeleton.** Her call: Spotify's API changes made the app useless.
+
+- Website taken down (GitHub Pages turned off) and the GitHub repo archived: read-only,
+  code kept. To undo: repo Settings, Unarchive, then turn Pages back on.
+- Local folder moved to `Claude Code Projects\_archive\`.
+- Supabase `shotgun` (`jgcutvnmmehqpskpvmzy`, whenworks account) has been paused since mid-September.
+  Not deleted. Supabase only lets you restore a paused project for about 90 days after it
+  paused; after that it is gone, which is fine: the setup file below is the skeleton.
+- Skeleton: `supabase/schema.sql` (full setup) + this repo. To reuse: new Supabase project, run
+  the schema, put the new URL + key in the client, add it to the keep-alive pinger.
+
+
 A personal Spotify commute DJ. One tap before a drive stocks the Spotify queue with a
 flow-ordered set of songs — by mood, by a seed song's vibe, or by learned time-of-day taste — so
 everything is decided before she pulls off and nothing needs touching mid-drive.
